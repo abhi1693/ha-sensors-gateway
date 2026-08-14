@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import tempfile
 import threading
 import unittest
@@ -200,12 +201,18 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(2, len(UpstreamHandler.requests))
 
     def test_oversized_authenticated_batch_is_rejected(self) -> None:
-        document = {
-            "type": "update_sensor_states",
-            "data": [{"state": "x" * (2 * 1024 * 1024)}],
-        }
-        status, _ = self.request("POST", f"/api/webhook/{WEBHOOK_ID}", document)
-        self.assertEqual(413, status)
+        request = (
+            f"POST /api/webhook/{WEBHOOK_ID} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{self.gateway.server_port}\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {2 * 1024 * 1024 + 1}\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode()
+        with socket.create_connection(("127.0.0.1", self.gateway.server_port)) as client:
+            client.sendall(request)
+            response = client.recv(1024)
+
+        self.assertIn(b" 413 ", response.partition(b"\r\n")[0])
         self.assertEqual([], UpstreamHandler.requests)
 
 
