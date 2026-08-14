@@ -1,0 +1,37 @@
+[project]
+name = "ha-sensors-gateway"
+version = "0.1.0"
+description = "Least-privilege gateway for Home Assistant Companion App sensor webhooks"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Abhimanyu Saharan" }]
+keywords = ["home-assistant", "companion-app", "sensors", "webhook", "self-hosted"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: No Input/Output (Daemon)",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Home Automation",
+  "Topic :: Internet :: Proxy Servers",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/abhi1693/ha-sensors-gateway"
+Issues = "https://github.com/abhi1693/ha-sensors-gateway/issues"
+Source = "https://github.com/abhi1693/ha-sensors-gateway"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
