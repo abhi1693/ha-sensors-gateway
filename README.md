@@ -63,7 +63,8 @@ Additional controls include:
 - strict 64-character webhook ID and path validation;
 - JSON-only requests and duplicate-key rejection;
 - configurable request/response limits and per-capability rate limiting;
-- a fixed operator-defined upstream, preventing request-driven SSRF;
+- a fixed operator-defined upstream with environment proxies disabled and
+  redirects rejected;
 - bounded timeouts and secret-free structured logs;
 - a non-root, multi-architecture container with no runtime dependencies;
 - pinned base image, SBOM, provenance, and GitHub artifact attestation.

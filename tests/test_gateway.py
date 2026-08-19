@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, urlopen
 
-from ha_sensors_gateway.gateway import Configuration, create_server
+from ha_sensors_gateway.gateway import Configuration, build_upstream_opener, create_server
 
 WEBHOOK_ID = "a" * 64
 
@@ -34,6 +34,36 @@ class UpstreamHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(response)))
         self.end_headers()
         self.wfile.write(response)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+class RedirectTargetHandler(BaseHTTPRequestHandler):
+    requests: ClassVar[list[tuple[str, str]]] = []
+
+    def do_GET(self) -> None:
+        self.requests.append((self.command, self.path))
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_POST = do_GET
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+class RedirectingUpstreamHandler(BaseHTTPRequestHandler):
+    redirect_status: ClassVar[int] = 302
+    redirect_url: ClassVar[str] = ""
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(self.redirect_status)
+        self.send_header("Location", self.redirect_url)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -125,6 +155,56 @@ class GatewayTest(unittest.TestCase):
             [(f"/api/webhook/{WEBHOOK_ID}", document)],
             UpstreamHandler.requests,
         )
+
+    def test_upstream_redirects_are_rejected_without_contacting_target(self) -> None:
+        redirect_target = ThreadingHTTPServer(("127.0.0.1", 0), RedirectTargetHandler)
+        redirect_target_thread = threading.Thread(
+            target=redirect_target.serve_forever,
+            daemon=True,
+        )
+        redirect_target_thread.start()
+        RedirectTargetHandler.requests.clear()
+        RedirectingUpstreamHandler.redirect_url = (
+            f"http://127.0.0.1:{redirect_target.server_port}/redirect-target"
+        )
+        redirecting_upstream = ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            RedirectingUpstreamHandler,
+        )
+        redirecting_upstream_thread = threading.Thread(
+            target=redirecting_upstream.serve_forever,
+            daemon=True,
+        )
+        redirecting_upstream_thread.start()
+        gateway = create_server(
+            ("127.0.0.1", 0),
+            self.config_path,
+            f"http://127.0.0.1:{redirecting_upstream.server_port}",
+            rate_limit=10,
+        )
+        gateway_thread = threading.Thread(target=gateway.serve_forever, daemon=True)
+        gateway_thread.start()
+        try:
+            for redirect_status in (301, 302, 303, 307, 308):
+                with self.subTest(redirect_status=redirect_status):
+                    RedirectingUpstreamHandler.redirect_status = redirect_status
+                    request = Request(
+                        f"http://127.0.0.1:{gateway.server_port}/api/webhook/{WEBHOOK_ID}",
+                        data=b'{"type":"get_config"}',
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with self.assertRaises(HTTPError) as context:
+                        urlopen(request)
+                    self.assertEqual(502, context.exception.code)
+            self.assertEqual([], RedirectTargetHandler.requests)
+        finally:
+            gateway.shutdown()
+            gateway.server_close()
+            redirecting_upstream.shutdown()
+            redirecting_upstream.server_close()
+            redirect_target.shutdown()
+            redirect_target.server_close()
 
     def test_control_command_is_hidden_and_not_forwarded(self) -> None:
         status, _ = self.request(
@@ -307,6 +387,14 @@ class GatewayTest(unittest.TestCase):
 
 
 class ConfigurationTest(unittest.TestCase):
+    def test_upstream_opener_does_not_load_environment_proxies(self) -> None:
+        with patch("urllib.request.getproxies", side_effect=AssertionError("proxy lookup")):
+            opener = build_upstream_opener()
+        proxy_handlers = [
+            handler for handler in opener.handlers if isinstance(handler, ProxyHandler)
+        ]
+        self.assertEqual([], proxy_handlers)
+
     def test_upstream_url_is_required(self) -> None:
         with (
             patch.dict(os.environ, {}, clear=True),

@@ -16,7 +16,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import (
+    HTTPRedirectHandler,
+    OpenerDirector,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from ha_sensors_gateway import __version__
 
@@ -69,6 +75,26 @@ def normalize_upstream_url(value: str) -> str:
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("UPSTREAM_URL must not contain credentials, a query, or a fragment")
     return value.rstrip("/")
+
+
+class NoRedirectHandler(HTTPRedirectHandler):
+    """Refuse to turn an upstream redirect into a request to another URL."""
+
+    def redirect_request(
+        self,
+        request: Request,
+        file_pointer: Any,
+        status: int,
+        message: str,
+        headers: Any,
+        new_url: str,
+    ) -> None:
+        return None
+
+
+def build_upstream_opener() -> OpenerDirector:
+    """Build an upstream client isolated from proxy environment variables."""
+    return build_opener(ProxyHandler({}), NoRedirectHandler())
 
 
 def load_capabilities(path: str) -> dict[str, str]:
@@ -155,6 +181,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     sys_version = ""
     capabilities: ClassVar[dict[str, str]] = {}
     upstream_url = ""
+    upstream_opener: ClassVar[OpenerDirector] = build_upstream_opener()
     rate_limiter = RateLimiter(180)
     max_request_bytes = 2 * 1024 * 1024
     max_response_bytes = 1024 * 1024
@@ -307,18 +334,20 @@ class GatewayHandler(BaseHTTPRequestHandler):
             method="POST",
         )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
+            with self.upstream_opener.open(request, timeout=self.timeout_seconds) as response:
                 self._forward_response(response, device, command)
         except HTTPError as error:
-            self._forward_response(error, device, command)
+            with error:
+                if 300 <= error.code < 400:
+                    self._upstream_unavailable(device, command, "redirect-rejected")
+                else:
+                    self._forward_response(error, device, command)
         except (TimeoutError, URLError):
-            emit_log(
-                "forwarded",
-                command=command,
-                device=device,
-                status="upstream-unavailable",
-            )
-            self._respond(502, b'{"error":"upstream unavailable"}')
+            self._upstream_unavailable(device, command, "upstream-unavailable")
+
+    def _upstream_unavailable(self, device: str, command: str, status: str) -> None:
+        emit_log("forwarded", command=command, device=device, status=status)
+        self._respond(502, b'{"error":"upstream unavailable"}')
 
     def _forward_response(
         self,
@@ -440,6 +469,7 @@ def create_server(
         {
             "capabilities": capabilities,
             "upstream_url": normalize_upstream_url(upstream_url),
+            "upstream_opener": build_upstream_opener(),
             "rate_limiter": RateLimiter(rate_limit),
             "max_request_bytes": max_request_bytes,
             "max_response_bytes": max_response_bytes,
