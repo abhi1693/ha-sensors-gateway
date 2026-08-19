@@ -1,7 +1,7 @@
 ---
 services:
   gateway:
-    image: ghcr.io/abhi1693/ha-sensors-gateway:0.1.0
+    image: ghcr.io/abhi1693/ha-sensors-gateway:0.2.0
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]

@@ -172,7 +172,7 @@ docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -e UPSTREAM_URL=http://home-assistant:8123 \
   -v "$PWD/webhooks.json:/run/secrets/webhooks.json:ro" \
-  ghcr.io/abhi1693/ha-sensors-gateway:0.1.0
+  ghcr.io/abhi1693/ha-sensors-gateway:0.2.0
 ```
 
 Alternatively, copy `examples/compose.yaml` and start it with `docker compose
