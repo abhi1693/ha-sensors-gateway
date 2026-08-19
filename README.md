@@ -208,9 +208,10 @@ any provider terminating TLS can observe the webhook capability in the URL.
 The runtime uses only the Python standard library.
 
 ```sh
-python -m pip install ruff==0.15.22
+python -m pip install -r requirements-dev.txt
 ruff check .
 ruff format --check .
+mypy --strict src
 PYTHONPATH=src python -m unittest discover -s tests -v
 docker build -t ha-sensors-gateway:test .
 ```
