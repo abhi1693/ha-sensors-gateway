@@ -1,5 +1,6 @@
 .git
 .github
+.coverage
 .idea
 .pytest_cache
 .ruff_cache

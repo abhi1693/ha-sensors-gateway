@@ -23,7 +23,7 @@ class MetadataConsistencyTest(unittest.TestCase):
 
         self.assertIn("requirements-dev.txt", readme)
         self.assertIn("requirements-dev.txt", workflow)
-        for duplicated_version in ("mypy==", "ruff=="):
+        for duplicated_version in ("coverage==", "mypy==", "ruff=="):
             self.assertNotIn(duplicated_version, readme)
             self.assertNotIn(duplicated_version, workflow)
 

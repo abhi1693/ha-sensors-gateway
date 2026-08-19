@@ -9,11 +9,11 @@ import tempfile
 import threading
 import time
 import unittest
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, urlopen
 
@@ -22,13 +22,15 @@ from ha_sensors_gateway.gateway import (
     SUPPORTED_COMMANDS,
     Capability,
     Configuration,
+    GatewayHandler,
+    RateLimiter,
     build_upstream_opener,
     create_server,
     load_capabilities,
     normalize_upstream_url,
 )
 from ha_sensors_gateway.healthcheck import probe_health
-from ha_sensors_gateway.settings import MAX_REQUEST_BYTES
+from ha_sensors_gateway.settings import INTEGER_SETTINGS, MAX_REQUEST_BYTES
 
 WEBHOOK_ID = "a" * 64
 
@@ -158,7 +160,7 @@ class GatewayTest(unittest.TestCase):
 
     def setUp(self) -> None:
         UpstreamHandler.requests.clear()
-        self.gateway.RequestHandlerClass.rate_limiter._requests.clear()
+        self.gateway.RequestHandlerClass.rate_limiter = RateLimiter(2)
 
     def request(self, method: str, path: str, document: dict | None = None) -> tuple[int, bytes]:
         data = json.dumps(document).encode() if document is not None else None
@@ -172,7 +174,14 @@ class GatewayTest(unittest.TestCase):
             with urlopen(request) as response:
                 return response.status, response.read()
         except HTTPError as error:
-            return error.code, error.read()
+            with error:
+                return error.code, error.read()
+
+    def raw_request(self, request: bytes) -> bytes:
+        with socket.create_connection(("127.0.0.1", self.gateway.server_port)) as client:
+            client.sendall(request)
+            client.shutdown(socket.SHUT_WR)
+            return client.recv(4096)
 
     def test_health_endpoint(self) -> None:
         status, body = self.request("GET", "/healthz")
@@ -183,6 +192,20 @@ class GatewayTest(unittest.TestCase):
     def test_health_endpoint_rejects_non_get_methods(self) -> None:
         status, _ = self.request("PUT", "/healthz")
         self.assertEqual(404, status)
+
+    def test_head_health_and_unknown_get(self) -> None:
+        connection = HTTPConnection("127.0.0.1", self.gateway.server_port, timeout=2)
+        try:
+            connection.request("HEAD", "/healthz")
+            response = connection.getresponse()
+            self.assertEqual(200, response.status)
+            self.assertEqual(b"", response.read())
+        finally:
+            connection.close()
+
+        status, body = self.request("GET", "/unknown")
+        self.assertEqual(404, status)
+        self.assertEqual({"error": "not found"}, json.loads(body))
 
     def test_unsupported_methods_are_hidden_without_a_server_banner(self) -> None:
         for method in ("TRACE", "CONNECT", "BREW"):
@@ -227,6 +250,22 @@ class GatewayTest(unittest.TestCase):
             UpstreamHandler.requests,
         )
 
+    def test_every_supported_command_is_forwarded(self) -> None:
+        self.gateway.RequestHandlerClass.rate_limiter = RateLimiter(len(SUPPORTED_COMMANDS))
+        for command in sorted(SUPPORTED_COMMANDS):
+            with self.subTest(command=command):
+                status, _ = self.request(
+                    "POST",
+                    f"/api/webhook/{WEBHOOK_ID}",
+                    {"type": command},
+                )
+                self.assertEqual(200, status)
+
+        self.assertEqual(
+            SUPPORTED_COMMANDS,
+            {document["type"] for _, document in UpstreamHandler.requests},
+        )
+
     def test_upstream_redirects_are_rejected_without_contacting_target(self) -> None:
         redirect_target = ThreadingHTTPServer(("127.0.0.1", 0), RedirectTargetHandler)
         redirect_target_thread = threading.Thread(
@@ -267,7 +306,8 @@ class GatewayTest(unittest.TestCase):
                     )
                     with self.assertRaises(HTTPError) as context:
                         urlopen(request)
-                    self.assertEqual(502, context.exception.code)
+                    with context.exception:
+                        self.assertEqual(502, context.exception.code)
             self.assertEqual([], RedirectTargetHandler.requests)
         finally:
             gateway.shutdown()
@@ -305,11 +345,12 @@ class GatewayTest(unittest.TestCase):
                     )
                     with self.assertRaises(HTTPError) as context:
                         urlopen(request)
-                    self.assertEqual(502, context.exception.code)
-                    self.assertEqual(
-                        {"error": "upstream unavailable"},
-                        json.loads(context.exception.read()),
-                    )
+                    with context.exception:
+                        self.assertEqual(502, context.exception.code)
+                        self.assertEqual(
+                            {"error": "upstream unavailable"},
+                            json.loads(context.exception.read()),
+                        )
 
             FailingUpstreamHandler.mode = "http-error"
             request = Request(
@@ -320,8 +361,9 @@ class GatewayTest(unittest.TestCase):
             )
             with self.assertRaises(HTTPError) as context:
                 urlopen(request)
-            self.assertEqual(503, context.exception.code)
-            self.assertEqual({"error": "maintenance"}, json.loads(context.exception.read()))
+            with context.exception:
+                self.assertEqual(503, context.exception.code)
+                self.assertEqual({"error": "maintenance"}, json.loads(context.exception.read()))
         finally:
             gateway.shutdown()
             gateway.server_close()
@@ -342,6 +384,65 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(502, status)
         self.assertEqual({"error": "upstream unavailable"}, json.loads(body))
         self.assertEqual([], UpstreamHandler.requests)
+
+    def test_upstream_timeout_becomes_502(self) -> None:
+        with patch.object(
+            self.gateway.RequestHandlerClass.upstream_opener,
+            "open",
+            side_effect=TimeoutError("upstream timed out"),
+        ):
+            status, body = self.request(
+                "POST",
+                f"/api/webhook/{WEBHOOK_ID}",
+                {"type": "get_config"},
+            )
+        self.assertEqual(502, status)
+        self.assertEqual({"error": "upstream unavailable"}, json.loads(body))
+
+    def test_oversized_upstream_response_becomes_502(self) -> None:
+        gateway = create_server(
+            ("127.0.0.1", 0),
+            self.config_path,
+            f"http://127.0.0.1:{self.upstream.server_port}",
+            max_response_bytes=4,
+        )
+        gateway_thread = threading.Thread(target=gateway.serve_forever, daemon=True)
+        gateway_thread.start()
+        try:
+            request = Request(
+                f"http://127.0.0.1:{gateway.server_port}/api/webhook/{WEBHOOK_ID}",
+                data=b'{"type":"get_config"}',
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as context:
+                urlopen(request)
+            with context.exception:
+                self.assertEqual(502, context.exception.code)
+                self.assertEqual(
+                    {"error": "upstream unavailable"},
+                    json.loads(context.exception.read()),
+                )
+        finally:
+            gateway.shutdown()
+            gateway.server_close()
+
+    def test_upstream_response_validation(self) -> None:
+        handler = object.__new__(GatewayHandler)
+        handler.max_response_bytes = 16
+
+        response = Mock()
+        response.read.return_value = b"{}"
+        response.status = None
+        response.headers = {}
+        with self.assertRaisesRegex(HTTPException, "no status"):
+            handler._read_upstream_response(response)
+
+        response.status = 200
+        response.headers = {"Content-Type": "text/plain\r\nX-Injected: true"}
+        buffered = handler._read_upstream_response(response)
+        self.assertIsNotNone(buffered)
+        self.assertEqual("application/octet-stream", buffered.content_type)
 
     def test_control_command_is_hidden_and_not_forwarded(self) -> None:
         status, _ = self.request(
@@ -431,7 +532,8 @@ class GatewayTest(unittest.TestCase):
             )
             with self.assertRaises(HTTPError) as context:
                 urlopen(request)
-            statuses.append(context.exception.code)
+            with context.exception:
+                statuses.append(context.exception.code)
 
         self.assertEqual([415, 415, 415], statuses)
         status, _ = self.request(
@@ -453,9 +555,54 @@ class GatewayTest(unittest.TestCase):
             )
             with self.assertRaises(HTTPError) as context:
                 urlopen(request)
-            statuses.append(context.exception.code)
+            with context.exception:
+                statuses.append(context.exception.code)
 
         self.assertEqual([415, 415], statuses)
+        self.assertEqual([], UpstreamHandler.requests)
+
+    def test_transfer_encoding_and_malformed_lengths_are_rejected(self) -> None:
+        requests = (
+            (
+                "Transfer-Encoding: chunked\r\nContent-Type: application/json\r\n",
+                400,
+            ),
+            ("Content-Type: application/json\r\n", 400),
+            ("Content-Type: application/json\r\nContent-Length: nope\r\n", 413),
+            ("Content-Type: application/json\r\nContent-Length: -1\r\n", 413),
+            (
+                "Content-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 2\r\n",
+                400,
+            ),
+        )
+        self.gateway.RequestHandlerClass.rate_limiter = RateLimiter(len(requests))
+        for headers, expected_status in requests:
+            with self.subTest(headers=headers):
+                request = (
+                    f"POST /api/webhook/{WEBHOOK_ID} HTTP/1.1\r\n"
+                    "Host: localhost\r\n"
+                    f"{headers}"
+                    "Connection: close\r\n\r\n"
+                ).encode()
+                response = self.raw_request(request)
+                self.assertIn(
+                    f" {expected_status} ".encode(),
+                    response.partition(b"\r\n")[0],
+                )
+        self.assertEqual([], UpstreamHandler.requests)
+
+    def test_incomplete_body_is_rejected(self) -> None:
+        request = (
+            f"POST /api/webhook/{WEBHOOK_ID} HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Content-Type: application/json\r\n"
+            "Content-Length: 100\r\n"
+            "Connection: close\r\n\r\n"
+            "{}"
+        ).encode()
+        response = self.raw_request(request)
+
+        self.assertIn(b" 400 ", response.partition(b"\r\n")[0])
         self.assertEqual([], UpstreamHandler.requests)
 
     def test_duplicate_type_is_rejected(self) -> None:
@@ -468,6 +615,25 @@ class GatewayTest(unittest.TestCase):
         with self.assertRaises(HTTPError) as context:
             urlopen(request)
         self.assertEqual(400, context.exception.code)
+        context.exception.close()
+        self.assertEqual([], UpstreamHandler.requests)
+
+    def test_invalid_json_shapes_are_rejected(self) -> None:
+        self.gateway.RequestHandlerClass.rate_limiter = RateLimiter(3)
+        statuses = []
+        for body in (b"\xff", b"[]", b'{"type":null}'):
+            with self.subTest(body=body):
+                request = Request(
+                    f"{self.base_url}/api/webhook/{WEBHOOK_ID}",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(HTTPError) as context:
+                    urlopen(request)
+                with context.exception:
+                    statuses.append(context.exception.code)
+        self.assertEqual([400, 400, 404], statuses)
         self.assertEqual([], UpstreamHandler.requests)
 
     def test_rate_limit_is_per_capability(self) -> None:
@@ -496,9 +662,7 @@ class GatewayTest(unittest.TestCase):
                     f"Content-Length: {MAX_REQUEST_BYTES.default + 1}\r\n"
                     "Connection: close\r\n\r\n"
                 ).encode()
-                with socket.create_connection(("127.0.0.1", self.gateway.server_port)) as client:
-                    client.sendall(request)
-                    response = client.recv(1024)
+                response = self.raw_request(request)
 
                 self.assertIn(b" 413 ", response.partition(b"\r\n")[0])
         self.assertEqual([], UpstreamHandler.requests)
@@ -569,6 +733,12 @@ class ConfigurationTest(unittest.TestCase):
             path.write_text(json.dumps(document), encoding="utf-8")
             return load_capabilities(str(path))
 
+    def load_capability_json(self, document: str) -> dict[str, Capability]:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "webhooks.json"
+            path.write_text(document, encoding="utf-8")
+            return load_capabilities(str(path))
+
     def test_capabilities_support_legacy_ingest_only_and_explicit_commands(self) -> None:
         legacy_id = "a" * 64
         ingest_id = "b" * 64
@@ -602,6 +772,8 @@ class ConfigurationTest(unittest.TestCase):
         invalid_metadata = (
             {"device": "test-phone", "profile": "standard"},
             {"device": "test-phone", "commands": []},
+            {"device": "test-phone", "commands": "get_config"},
+            {"device": "test-phone", "commands": [1]},
             {"device": "test-phone", "commands": ["call_service"]},
             {"device": "test-phone", "commands": ["get_config", "get_config"]},
             {
@@ -616,6 +788,24 @@ class ConfigurationTest(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, "mobile webhook"),
             ):
                 self.load_capability_document({WEBHOOK_ID: metadata})
+
+    def test_invalid_capability_documents_fail_at_startup(self) -> None:
+        invalid_documents = (
+            {},
+            [],
+            {"short-id": {"device": "test-phone"}},
+            {WEBHOOK_ID: "test-phone"},
+            {WEBHOOK_ID: {"device": "Test Phone"}},
+            {WEBHOOK_ID: {"device": "test-phone", "unexpected": True}},
+        )
+        for document in invalid_documents:
+            with self.subTest(document=document), self.assertRaises(ValueError):
+                self.load_capability_document(document)
+
+        duplicate = json.dumps({WEBHOOK_ID: {"device": "first-phone"}})
+        duplicate = duplicate[:-1] + f',"{WEBHOOK_ID}":{{"device":"second-phone"}}}}'
+        with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+            self.load_capability_json(duplicate)
 
     def test_upstream_opener_does_not_load_environment_proxies(self) -> None:
         with patch("urllib.request.getproxies", side_effect=AssertionError("proxy lookup")):
@@ -649,6 +839,20 @@ class ConfigurationTest(unittest.TestCase):
         self.assertEqual(12, configuration.max_concurrent_requests)
         self.assertEqual(4096, configuration.max_request_bytes)
 
+    def test_invalid_integer_settings_fail_at_startup(self) -> None:
+        for setting in INTEGER_SETTINGS:
+            for value in ("invalid", "0", str(setting.maximum + 1)):
+                with (
+                    self.subTest(setting=setting.name, value=value),
+                    patch.dict(
+                        os.environ,
+                        {"UPSTREAM_URL": "http://home-assistant", setting.name: value},
+                        clear=True,
+                    ),
+                    self.assertRaisesRegex(ValueError, setting.name),
+                ):
+                    Configuration.from_environment()
+
     def test_valid_upstream_origins_are_normalized(self) -> None:
         origins = {
             "http://home-assistant:8123/": "http://home-assistant:8123",
@@ -674,6 +878,7 @@ class ConfigurationTest(unittest.TestCase):
             "http://home assistant:8123",
             "http://home-assistant:8123\n",
             "http://home-assistant:8123\\suffix",
+            "http://home-assistant\\evil",
             "http://[::1",
             "ftp://home-assistant",
         )
@@ -698,6 +903,14 @@ class ConfigurationTest(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "must not contain credentials"),
         ):
             Configuration.from_environment()
+
+
+class RateLimiterTest(unittest.TestCase):
+    def test_expired_requests_are_removed(self) -> None:
+        limiter = RateLimiter(limit=1, window_seconds=60)
+        with patch("ha_sensors_gateway.gateway.time.monotonic", side_effect=(0.0, 61.0)):
+            self.assertTrue(limiter.allow("capability"))
+            self.assertTrue(limiter.allow("capability"))
 
 
 if __name__ == "__main__":
