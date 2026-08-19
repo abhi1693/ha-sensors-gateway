@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import socket
@@ -511,6 +512,28 @@ class GatewayTest(unittest.TestCase):
         )
         self.assertEqual(404, status)
         self.assertEqual([], UpstreamHandler.requests)
+
+    def test_capability_lookup_always_compares_every_configured_id(self) -> None:
+        capabilities = {
+            character * 64: Capability(device=f"phone-{character}", commands=INGEST_ONLY_COMMANDS)
+            for character in ("a", "b", "c")
+        }
+        handler = object.__new__(self.gateway.RequestHandlerClass)
+        with patch.object(handler, "capabilities", capabilities):
+            for candidate, expected in (
+                ("a" * 64, capabilities["a" * 64]),
+                ("c" * 64, capabilities["c" * 64]),
+                ("d" * 64, None),
+            ):
+                with (
+                    self.subTest(candidate=candidate),
+                    patch(
+                        "ha_sensors_gateway.gateway.hmac.compare_digest",
+                        wraps=hmac.compare_digest,
+                    ) as compare_digest,
+                ):
+                    self.assertEqual(expected, handler._find_capability(candidate))
+                    self.assertEqual(len(capabilities), compare_digest.call_count)
 
     def test_query_string_is_rejected(self) -> None:
         status, _ = self.request(

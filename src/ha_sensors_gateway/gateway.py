@@ -320,10 +320,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self._respond(status, b'{"error":"invalid request"}')
 
     def _find_capability(self, candidate: str) -> Capability | None:
+        matched_capability: Capability | None = None
         for webhook_id, capability in self.capabilities.items():
             if hmac.compare_digest(candidate, webhook_id):
-                return capability
-        return None
+                matched_capability = capability
+        return matched_capability
 
     def _reject(self, device: str, status: int, reason: str) -> None:
         emit_log("rejected", device=device, reason=reason, status=status)
