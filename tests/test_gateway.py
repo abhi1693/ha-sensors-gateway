@@ -445,6 +445,24 @@ class GatewayTest(unittest.TestCase):
         self.assertIsNotNone(buffered)
         self.assertEqual("application/octet-stream", buffered.content_type)
 
+    def test_client_write_failures_do_not_escape_handler(self) -> None:
+        handler = object.__new__(GatewayHandler)
+        handler.command = "GET"
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        handler.wfile = Mock()
+
+        for error in (
+            BrokenPipeError("closed"),
+            ConnectionResetError("reset"),
+            ConnectionAbortedError("aborted"),
+            TimeoutError("timed out"),
+        ):
+            with self.subTest(error=error):
+                handler.wfile.write.side_effect = error
+                handler._respond(200, b"response")
+
     def test_control_command_is_hidden_and_not_forwarded(self) -> None:
         status, _ = self.request(
             "POST",

@@ -293,7 +293,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.end_headers()
             if self.command != "HEAD" and body:
                 self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+        except OSError:
             return
 
     def send_response(self, code: int, message: str | None = None) -> None:
