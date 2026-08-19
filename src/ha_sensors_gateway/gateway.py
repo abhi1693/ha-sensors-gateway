@@ -11,10 +11,10 @@ import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from http.client import HTTPResponse
+from http.client import HTTPException, HTTPResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import (
     HTTPRedirectHandler,
@@ -116,6 +116,13 @@ def load_capabilities(path: str) -> dict[str, str]:
             raise ValueError("invalid device alias")
         capabilities[webhook_id] = device
     return capabilities
+
+
+@dataclass(frozen=True)
+class BufferedUpstreamResponse:
+    status: int
+    body: bytes
+    content_type: str
 
 
 @dataclass(frozen=True)
@@ -333,30 +340,29 @@ class GatewayHandler(BaseHTTPRequestHandler):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        buffered_response: BufferedUpstreamResponse | None = None
+        redirect_rejected = False
         try:
-            with self.upstream_opener.open(request, timeout=self.timeout_seconds) as response:
-                self._forward_response(response, device, command)
-        except HTTPError as error:
-            with error:
-                if 300 <= error.code < 400:
-                    self._upstream_unavailable(device, command, "redirect-rejected")
+            try:
+                response = self.upstream_opener.open(request, timeout=self.timeout_seconds)
+            except HTTPError as error:
+                response = error
+            with response:
+                if isinstance(response, HTTPError) and 300 <= response.code < 400:
+                    redirect_rejected = True
                 else:
-                    self._forward_response(error, device, command)
-        except (TimeoutError, URLError):
+                    buffered_response = self._read_upstream_response(response)
+        except HTTPException:
+            self._upstream_unavailable(device, command, "upstream-invalid-response")
+            return
+        except OSError:
             self._upstream_unavailable(device, command, "upstream-unavailable")
+            return
 
-    def _upstream_unavailable(self, device: str, command: str, status: str) -> None:
-        emit_log("forwarded", command=command, device=device, status=status)
-        self._respond(502, b'{"error":"upstream unavailable"}')
-
-    def _forward_response(
-        self,
-        response: HTTPResponse | HTTPError,
-        device: str,
-        command: str,
-    ) -> None:
-        response_body = response.read(self.max_response_bytes + 1)
-        if len(response_body) > self.max_response_bytes:
+        if redirect_rejected:
+            self._upstream_unavailable(device, command, "redirect-rejected")
+            return
+        if buffered_response is None:
             emit_log(
                 "forwarded",
                 command=command,
@@ -365,12 +371,36 @@ class GatewayHandler(BaseHTTPRequestHandler):
             )
             self._respond(502, b'{"error":"upstream unavailable"}')
             return
+        emit_log(
+            "forwarded",
+            command=command,
+            device=device,
+            status=buffered_response.status,
+        )
+        self._respond(
+            buffered_response.status,
+            buffered_response.body,
+            buffered_response.content_type,
+        )
+
+    def _upstream_unavailable(self, device: str, command: str, status: str) -> None:
+        emit_log("forwarded", command=command, device=device, status=status)
+        self._respond(502, b'{"error":"upstream unavailable"}')
+
+    def _read_upstream_response(
+        self,
+        response: HTTPResponse | HTTPError,
+    ) -> BufferedUpstreamResponse | None:
+        response_body = response.read(self.max_response_bytes + 1)
+        if len(response_body) > self.max_response_bytes:
+            return None
         status = response.status
+        if status is None:
+            raise HTTPException("upstream response has no status")
         content_type = response.headers.get("Content-Type", "application/json")
         if "\r" in content_type or "\n" in content_type:
             content_type = "application/octet-stream"
-        emit_log("forwarded", command=command, device=device, status=status)
-        self._respond(status, response_body, content_type)
+        return BufferedUpstreamResponse(status, response_body, content_type)
 
     def do_GET(self) -> None:
         if not self._complete_inbound_request():

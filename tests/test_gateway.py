@@ -69,6 +69,41 @@ class RedirectingUpstreamHandler(BaseHTTPRequestHandler):
         return
 
 
+class FailingUpstreamHandler(BaseHTTPRequestHandler):
+    mode: ClassVar[str] = "disconnect"
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.close_connection = True
+        if self.mode == "disconnect":
+            self.connection.shutdown(socket.SHUT_RDWR)
+            return
+        if self.mode == "bad-status":
+            self.wfile.write(b"NOT AN HTTP RESPONSE\r\n\r\n")
+            self.wfile.flush()
+            return
+        if self.mode == "incomplete-chunk":
+            self.wfile.write(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Transfer-Encoding: chunked\r\n"
+                b"Connection: close\r\n\r\n"
+                b"A\r\n{}"
+            )
+            self.wfile.flush()
+            return
+
+        body = b'{"error":"maintenance"}'
+        self.send_response(503)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
 class GatewayTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -205,6 +240,72 @@ class GatewayTest(unittest.TestCase):
             redirecting_upstream.server_close()
             redirect_target.shutdown()
             redirect_target.server_close()
+
+    def test_upstream_transport_failures_become_502_and_http_errors_are_preserved(self) -> None:
+        failing_upstream = ThreadingHTTPServer(("127.0.0.1", 0), FailingUpstreamHandler)
+        failing_upstream_thread = threading.Thread(
+            target=failing_upstream.serve_forever,
+            daemon=True,
+        )
+        failing_upstream_thread.start()
+        gateway = create_server(
+            ("127.0.0.1", 0),
+            self.config_path,
+            f"http://127.0.0.1:{failing_upstream.server_port}",
+            rate_limit=10,
+        )
+        gateway_thread = threading.Thread(target=gateway.serve_forever, daemon=True)
+        gateway_thread.start()
+        gateway_url = f"http://127.0.0.1:{gateway.server_port}/api/webhook/{WEBHOOK_ID}"
+        try:
+            for failure_mode in ("disconnect", "bad-status", "incomplete-chunk"):
+                with self.subTest(failure_mode=failure_mode):
+                    FailingUpstreamHandler.mode = failure_mode
+                    request = Request(
+                        gateway_url,
+                        data=b'{"type":"get_config"}',
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with self.assertRaises(HTTPError) as context:
+                        urlopen(request)
+                    self.assertEqual(502, context.exception.code)
+                    self.assertEqual(
+                        {"error": "upstream unavailable"},
+                        json.loads(context.exception.read()),
+                    )
+
+            FailingUpstreamHandler.mode = "http-error"
+            request = Request(
+                gateway_url,
+                data=b'{"type":"get_config"}',
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as context:
+                urlopen(request)
+            self.assertEqual(503, context.exception.code)
+            self.assertEqual({"error": "maintenance"}, json.loads(context.exception.read()))
+        finally:
+            gateway.shutdown()
+            gateway.server_close()
+            failing_upstream.shutdown()
+            failing_upstream.server_close()
+
+    def test_upstream_socket_error_becomes_502(self) -> None:
+        with patch.object(
+            self.gateway.RequestHandlerClass.upstream_opener,
+            "open",
+            side_effect=ConnectionResetError("upstream reset"),
+        ):
+            status, body = self.request(
+                "POST",
+                f"/api/webhook/{WEBHOOK_ID}",
+                {"type": "get_config"},
+            )
+        self.assertEqual(502, status)
+        self.assertEqual({"error": "upstream unavailable"}, json.loads(body))
+        self.assertEqual([], UpstreamHandler.requests)
 
     def test_control_command_is_hidden_and_not_forwarded(self) -> None:
         status, _ = self.request(
