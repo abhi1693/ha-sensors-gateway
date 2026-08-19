@@ -217,9 +217,10 @@ coverage report
 docker build -t ha-sensors-gateway:test .
 ```
 
-CI tests Python 3.12, 3.13, and 3.14 and enforces at least 90% branch coverage
-across the application package. Tagged releases publish attested `linux/amd64`
-and `linux/arm64` images to GHCR.
+CI tests Python 3.12, 3.13, and 3.14, enforces at least 90% branch coverage
+across the application package, and rejects fixed high or critical findings from
+a fresh runtime-image vulnerability database. Tagged releases publish attested
+`linux/amd64` and `linux/arm64` images to GHCR.
 
 ## Operational guidance
 

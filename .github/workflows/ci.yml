@@ -99,3 +99,14 @@ jobs:
           test "$(docker image inspect ha-sensors-gateway:test --format '{{.Config.User}}')" = "65532:65532"
           docker run --rm --entrypoint python3 ha-sensors-gateway:test \
             -c "import importlib.util; from ha_sensors_gateway.gateway import SUPPORTED_COMMANDS; assert 'call_service' not in SUPPORTED_COMMANDS; assert importlib.util.find_spec('pip') is None"
+
+      - name: Scan runtime image with a fresh vulnerability database
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ha-sensors-gateway:test
+          cache: "false"
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
