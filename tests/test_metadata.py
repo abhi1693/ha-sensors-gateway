@@ -26,6 +26,20 @@ class MetadataConsistencyTest(unittest.TestCase):
             self.assertIn("requirements-dev.txt", instructions)
             for duplicated_version in ("coverage==", "mypy==", "ruff=="):
                 self.assertNotIn(duplicated_version, instructions)
+            for duplicated_coverage_setting in (
+                "--branch",
+                "--source=ha_sensors_gateway",
+                "--show-missing",
+                "--fail-under",
+            ):
+                self.assertNotIn(duplicated_coverage_setting, instructions)
+
+        with (ROOT / "pyproject.toml").open("rb") as project_file:
+            coverage = tomllib.load(project_file)["tool"]["coverage"]
+        self.assertTrue(coverage["run"]["branch"])
+        self.assertEqual(["ha_sensors_gateway"], coverage["run"]["source"])
+        self.assertTrue(coverage["report"]["show_missing"])
+        self.assertEqual(90, coverage["report"]["fail_under"])
 
     def test_documented_setting_defaults_and_limits_match_runtime(self) -> None:
         readme_lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()

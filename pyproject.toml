@@ -35,3 +35,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.coverage.run]
+branch = true
+source = ["ha_sensors_gateway"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true

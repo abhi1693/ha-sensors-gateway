@@ -13,8 +13,8 @@ python -m pip install -r requirements-dev.txt
 ruff check .
 ruff format --check .
 mypy --strict src
-PYTHONPATH=src coverage run --branch --source=ha_sensors_gateway -m unittest discover -s tests -v
-coverage report --show-missing --fail-under=90
+PYTHONPATH=src coverage run -m unittest discover -s tests -v
+coverage report
 docker build -t ha-sensors-gateway:test .
 ```
 

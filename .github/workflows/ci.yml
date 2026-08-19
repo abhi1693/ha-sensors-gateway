@@ -47,9 +47,8 @@ jobs:
         env:
           PYTHONPATH: src
         run: |
-          coverage run --branch --source=ha_sensors_gateway \
-            -m unittest discover -s tests -v
-          coverage report --show-missing --fail-under=90
+          coverage run -m unittest discover -s tests -v
+          coverage report
 
       - name: Compile source
         run: python -m compileall -q src tests
