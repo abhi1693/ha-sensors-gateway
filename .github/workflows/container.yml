@@ -34,6 +34,23 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Verify release version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+
+          with open("pyproject.toml", "rb") as project_file:
+              project_version = tomllib.load(project_file)["project"]["version"]
+          release_version = os.environ["RELEASE_TAG"].removeprefix("v")
+          if release_version != project_version:
+              raise SystemExit(
+                  f"release version {release_version!r} does not match project {project_version!r}"
+              )
+          PY
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 

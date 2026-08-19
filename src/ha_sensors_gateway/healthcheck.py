@@ -6,6 +6,8 @@ import os
 from http import HTTPStatus
 from http.client import HTTPConnection, HTTPException
 
+from ha_sensors_gateway.settings import PORT
+
 EXPECTED_BODY = b'{"status":"ok"}'
 PROBE_TIMEOUT_SECONDS = 2
 
@@ -24,10 +26,10 @@ def probe_health(port: int) -> bool:
 
 def main() -> None:
     try:
-        port = int(os.getenv("PORT", "8080"))
+        port = int(os.getenv(PORT.name, str(PORT.default)))
     except ValueError:
         raise SystemExit(1) from None
-    if not 1 <= port <= 65535 or not probe_health(port):
+    if not 1 <= port <= PORT.maximum or not probe_health(port):
         raise SystemExit(1)
 
 

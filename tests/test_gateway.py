@@ -28,6 +28,7 @@ from ha_sensors_gateway.gateway import (
     normalize_upstream_url,
 )
 from ha_sensors_gateway.healthcheck import probe_health
+from ha_sensors_gateway.settings import MAX_REQUEST_BYTES
 
 WEBHOOK_ID = "a" * 64
 
@@ -139,7 +140,6 @@ class GatewayTest(unittest.TestCase):
             cls.config_path,
             upstream_url,
             rate_limit=2,
-            max_request_bytes=2 * 1024 * 1024,
         )
         cls.gateway_thread = threading.Thread(
             target=cls.gateway.serve_forever,
@@ -493,7 +493,7 @@ class GatewayTest(unittest.TestCase):
                     f"POST /api/webhook/{webhook_id} HTTP/1.1\r\n"
                     f"Host: 127.0.0.1:{self.gateway.server_port}\r\n"
                     "Content-Type: application/json\r\n"
-                    f"Content-Length: {2 * 1024 * 1024 + 1}\r\n"
+                    f"Content-Length: {MAX_REQUEST_BYTES.default + 1}\r\n"
                     "Connection: close\r\n\r\n"
                 ).encode()
                 with socket.create_connection(("127.0.0.1", self.gateway.server_port)) as client:

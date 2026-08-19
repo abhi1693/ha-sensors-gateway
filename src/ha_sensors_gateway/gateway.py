@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from http.client import HTTPException, HTTPResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import (
@@ -25,7 +25,17 @@ from urllib.request import (
     build_opener,
 )
 
-from ha_sensors_gateway import __version__
+from ha_sensors_gateway.settings import (
+    DEFAULT_WEBHOOK_CONFIG,
+    MAX_CONCURRENT_REQUESTS,
+    MAX_REQUEST_BYTES,
+    MAX_RESPONSE_BYTES,
+    PORT,
+    RATE_LIMIT_PER_MINUTE,
+    TIMEOUT_SECONDS,
+    WEBHOOK_CONFIG_NAME,
+    IntegerSetting,
+)
 
 WEBHOOK_PATH = re.compile(r"^/api/webhook/([0-9a-f]{64})$")
 SUPPORTED_COMMANDS = frozenset(
@@ -55,19 +65,14 @@ def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return document
 
 
-def read_positive_integer(
-    name: str,
-    default: int,
-    *,
-    maximum: int,
-) -> int:
-    raw_value = os.getenv(name, str(default))
+def read_positive_integer(setting: IntegerSetting) -> int:
+    raw_value = os.getenv(setting.name, str(setting.default))
     try:
         value = int(raw_value)
     except ValueError as error:
-        raise ValueError(f"{name} must be an integer") from error
-    if not 1 <= value <= maximum:
-        raise ValueError(f"{name} must be between 1 and {maximum}")
+        raise ValueError(f"{setting.name} must be an integer") from error
+    if not 1 <= value <= setting.maximum:
+        raise ValueError(f"{setting.name} must be between 1 and {setting.maximum}")
     return value
 
 
@@ -190,22 +195,14 @@ class Configuration:
         if not upstream_url:
             raise ValueError("UPSTREAM_URL is required")
         return cls(
-            port=read_positive_integer("PORT", 8080, maximum=65535),
-            webhook_config=os.getenv("WEBHOOK_CONFIG", "/run/secrets/webhooks.json"),
+            port=read_positive_integer(PORT),
+            webhook_config=os.getenv(WEBHOOK_CONFIG_NAME, DEFAULT_WEBHOOK_CONFIG),
             upstream_url=normalize_upstream_url(upstream_url),
-            rate_limit_per_minute=read_positive_integer(
-                "RATE_LIMIT_PER_MINUTE", 180, maximum=10_000
-            ),
-            max_request_bytes=read_positive_integer(
-                "MAX_REQUEST_BYTES", 2 * 1024 * 1024, maximum=16 * 1024 * 1024
-            ),
-            max_response_bytes=read_positive_integer(
-                "MAX_RESPONSE_BYTES", 1024 * 1024, maximum=16 * 1024 * 1024
-            ),
-            max_concurrent_requests=read_positive_integer(
-                "MAX_CONCURRENT_REQUESTS", 64, maximum=1024
-            ),
-            timeout_seconds=read_positive_integer("TIMEOUT_SECONDS", 15, maximum=120),
+            rate_limit_per_minute=read_positive_integer(RATE_LIMIT_PER_MINUTE),
+            max_request_bytes=read_positive_integer(MAX_REQUEST_BYTES),
+            max_response_bytes=read_positive_integer(MAX_RESPONSE_BYTES),
+            max_concurrent_requests=read_positive_integer(MAX_CONCURRENT_REQUESTS),
+            timeout_seconds=read_positive_integer(TIMEOUT_SECONDS),
         )
 
 
@@ -235,10 +232,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
     capabilities: ClassVar[dict[str, Capability]] = {}
     upstream_url = ""
     upstream_opener: ClassVar[OpenerDirector] = build_upstream_opener()
-    rate_limiter = RateLimiter(180)
-    max_request_bytes = 2 * 1024 * 1024
-    max_response_bytes = 1024 * 1024
-    timeout_seconds = 15
+    rate_limiter = RateLimiter(RATE_LIMIT_PER_MINUTE.default)
+    max_request_bytes = MAX_REQUEST_BYTES.default
+    max_response_bytes = MAX_RESPONSE_BYTES.default
+    timeout_seconds = TIMEOUT_SECONDS.default
 
     def setup(self) -> None:
         self.request.settimeout(self.timeout_seconds)
@@ -560,12 +557,12 @@ def create_server(
     address: tuple[str, int],
     config_path: str,
     upstream_url: str,
-    rate_limit: int,
+    rate_limit: int = RATE_LIMIT_PER_MINUTE.default,
     *,
-    max_request_bytes: int = 2 * 1024 * 1024,
-    max_response_bytes: int = 1024 * 1024,
-    max_concurrent_requests: int = 64,
-    timeout_seconds: int = 15,
+    max_request_bytes: int = MAX_REQUEST_BYTES.default,
+    max_response_bytes: int = MAX_RESPONSE_BYTES.default,
+    max_concurrent_requests: int = MAX_CONCURRENT_REQUESTS.default,
+    timeout_seconds: int = TIMEOUT_SECONDS.default,
 ) -> GatewayServer:
     capabilities = load_capabilities(config_path)
     handler = type(
@@ -598,9 +595,8 @@ def main() -> None:
     )
     emit_log(
         "started",
-        devices=len(server.RequestHandlerClass.capabilities),
+        devices=len(cast(type[GatewayHandler], server.RequestHandlerClass).capabilities),
         max_concurrent_requests=configuration.max_concurrent_requests,
         port=configuration.port,
-        version=__version__,
     )
     server.serve_forever()

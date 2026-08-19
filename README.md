@@ -176,11 +176,11 @@ gateway appends no device ID itself—the Companion App constructs its native
 | Variable | Default | Description |
 | --- | --- | --- |
 | `UPSTREAM_URL` | Required | Internal Home Assistant HTTP(S) origin only, with no credentials, path, query, or fragment, such as `http://home-assistant:8123`. |
-| `PORT` | `8080` | Gateway listen port; the image health check and example Compose port mapping use the same value. |
+| `PORT` | `8080` | Gateway listen port; upper bound is 65535. The image health check and example Compose port mapping use the same value. |
 | `WEBHOOK_CONFIG` | `/run/secrets/webhooks.json` | Mounted capability map. |
-| `RATE_LIMIT_PER_MINUTE` | `180` | Maximum accepted requests per webhook capability. |
-| `MAX_REQUEST_BYTES` | `2097152` | Maximum complete sensor batch size; upper bound is 16 MiB. |
-| `MAX_RESPONSE_BYTES` | `1048576` | Maximum Home Assistant response size; upper bound is 16 MiB. |
+| `RATE_LIMIT_PER_MINUTE` | `180` | Maximum accepted requests per webhook capability; upper bound is 10000. |
+| `MAX_REQUEST_BYTES` | `2097152` | Maximum complete sensor batch size; upper bound is 16777216 (16 MiB). |
+| `MAX_RESPONSE_BYTES` | `1048576` | Maximum Home Assistant response size; upper bound is 16777216 (16 MiB). |
 | `MAX_CONCURRENT_REQUESTS` | `64` | Maximum active client connections; upper bound is 1024. |
 | `TIMEOUT_SECONDS` | `15` | Absolute request header/body deadline and upstream socket timeout; upper bound is 120 seconds. |
 
