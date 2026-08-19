@@ -7,9 +7,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  attestations: write
-  id-token: write
 
 concurrency:
   group: container-${{ github.event.release.tag_name }}
@@ -20,9 +17,19 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  ci:
+    name: Required CI
+    uses: ./.github/workflows/ci.yml
+
   publish:
     name: Publish multi-architecture image
+    needs: ci
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
