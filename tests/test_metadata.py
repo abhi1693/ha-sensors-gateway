@@ -6,6 +6,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from ha_sensors_gateway.gateway import SUPPORTED_COMMANDS
 from ha_sensors_gateway.settings import (
     DEFAULT_WEBHOOK_CONFIG,
     INTEGER_SETTINGS,
@@ -55,6 +56,16 @@ class MetadataConsistencyTest(unittest.TestCase):
                 self.assertIn(f"| `{setting.default}` |", row)
                 self.assertIn(str(setting.maximum), row)
         self.assertIn(f"| `{DEFAULT_WEBHOOK_CONFIG}` |", rows[WEBHOOK_CONFIG_NAME])
+
+    def test_documented_command_allowlist_matches_runtime(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        command_table = readme.split("| Command | Purpose and security consequence |", 1)[1]
+        command_table = command_table.split("> [!WARNING]", 1)[0]
+        documented_commands = {
+            line.split("`")[1] for line in command_table.splitlines() if line.startswith("| `")
+        }
+
+        self.assertEqual(SUPPORTED_COMMANDS, documented_commands)
 
     def test_image_examples_match_project_version(self) -> None:
         with (ROOT / "pyproject.toml").open("rb") as project_file:

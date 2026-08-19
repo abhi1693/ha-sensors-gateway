@@ -129,11 +129,11 @@ an explicit, non-empty command list:
 Only commands in the globally supported table are accepted. Unknown or duplicate
 commands, an unknown profile, and a configuration containing both `profile` and
 `commands` fail startup. Omitting both fields retains the legacy behavior of
-granting all five supported commands; this is provided for compatibility and is
-not the recommended configuration. Ingest-only devices cannot refresh Home
-Assistant configuration or zones or register newly enabled sensors through the
-gateway; perform those operations through a trusted direct connection or grant
-only the additional commands required.
+granting all supported commands; this is provided for compatibility and is not
+the recommended configuration. Ingest-only devices cannot refresh Home Assistant
+configuration or zones or register newly enabled sensors through the gateway;
+perform those operations through a trusted direct connection or grant only the
+additional commands required.
 
 ### 2. Run the container
 
