@@ -19,13 +19,13 @@ ROOT = Path(__file__).parents[1]
 class MetadataConsistencyTest(unittest.TestCase):
     def test_development_tool_versions_have_one_source(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
-        self.assertIn("requirements-dev.txt", readme)
-        self.assertIn("requirements-dev.txt", workflow)
-        for duplicated_version in ("coverage==", "mypy==", "ruff=="):
-            self.assertNotIn(duplicated_version, readme)
-            self.assertNotIn(duplicated_version, workflow)
+        for instructions in (readme, contributing, workflow):
+            self.assertIn("requirements-dev.txt", instructions)
+            for duplicated_version in ("coverage==", "mypy==", "ruff=="):
+                self.assertNotIn(duplicated_version, instructions)
 
     def test_documented_setting_defaults_and_limits_match_runtime(self) -> None:
         readme_lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()

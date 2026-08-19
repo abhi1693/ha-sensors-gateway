@@ -9,10 +9,12 @@ welcome.
 4. Open a pull request explaining the security impact of the change.
 
 ```sh
-python -m pip install ruff==0.15.22
+python -m pip install -r requirements-dev.txt
 ruff check .
 ruff format --check .
-PYTHONPATH=src python -m unittest discover -s tests -v
+mypy --strict src
+PYTHONPATH=src coverage run --branch --source=ha_sensors_gateway -m unittest discover -s tests -v
+coverage report --show-missing --fail-under=90
 docker build -t ha-sensors-gateway:test .
 ```
 
