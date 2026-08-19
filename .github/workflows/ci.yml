@@ -93,4 +93,4 @@ jobs:
         run: |
           test "$(docker image inspect ha-sensors-gateway:test --format '{{.Config.User}}')" = "65532:65532"
           docker run --rm --entrypoint python3 ha-sensors-gateway:test \
-            -c "from ha_sensors_gateway.gateway import SUPPORTED_COMMANDS; assert 'call_service' not in SUPPORTED_COMMANDS"
+            -c "import importlib.util; from ha_sensors_gateway.gateway import SUPPORTED_COMMANDS; assert 'call_service' not in SUPPORTED_COMMANDS; assert importlib.util.find_spec('pip') is None"
