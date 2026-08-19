@@ -72,6 +72,7 @@ Additional controls include:
 
 - constant-time capability comparison;
 - strict 64-character webhook ID and path validation;
+- uniform `404` responses for unsupported methods and no server version banner;
 - JSON-only requests and duplicate-key rejection;
 - capability-independent pre-body validation responses;
 - configurable request/response limits and per-capability rate limiting;

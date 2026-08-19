@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
@@ -182,6 +183,30 @@ class GatewayTest(unittest.TestCase):
     def test_health_endpoint_rejects_non_get_methods(self) -> None:
         status, _ = self.request("PUT", "/healthz")
         self.assertEqual(404, status)
+
+    def test_unsupported_methods_are_hidden_without_a_server_banner(self) -> None:
+        for method in ("TRACE", "CONNECT", "BREW"):
+            with self.subTest(method=method):
+                connection = HTTPConnection("127.0.0.1", self.gateway.server_port, timeout=2)
+                try:
+                    connection.request(method, "/healthz")
+                    response = connection.getresponse()
+                    self.assertEqual(404, response.status)
+                    self.assertIsNone(response.getheader("Server"))
+                    self.assertEqual({"error": "not found"}, json.loads(response.read()))
+                finally:
+                    connection.close()
+
+    def test_successful_responses_do_not_expose_a_server_banner(self) -> None:
+        connection = HTTPConnection("127.0.0.1", self.gateway.server_port, timeout=2)
+        try:
+            connection.request("GET", "/healthz")
+            response = connection.getresponse()
+            self.assertEqual(200, response.status)
+            self.assertIsNone(response.getheader("Server"))
+            response.read()
+        finally:
+            connection.close()
 
     def test_complete_sensor_batch_is_forwarded_unchanged(self) -> None:
         document = {

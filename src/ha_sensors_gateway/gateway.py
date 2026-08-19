@@ -11,6 +11,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from http import HTTPStatus
 from http.client import HTTPException, HTTPResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar
@@ -231,8 +232,6 @@ class RateLimiter:
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
-    server_version = f"HASensorsGateway/{__version__}"
-    sys_version = ""
     capabilities: ClassVar[dict[str, Capability]] = {}
     upstream_url = ""
     upstream_opener: ClassVar[OpenerDirector] = build_upstream_opener()
@@ -299,6 +298,23 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             return
+
+    def send_response(self, code: int, message: str | None = None) -> None:
+        """Send status and date headers without a product/version banner."""
+        self.log_request(code)
+        self.send_response_only(code, message)
+        self.send_header("Date", self.date_time_string())
+
+    def send_error(
+        self,
+        code: int,
+        message: str | None = None,
+        explain: str | None = None,
+    ) -> None:
+        if code == HTTPStatus.NOT_IMPLEMENTED:
+            self.do_PUT()
+            return
+        super().send_error(code, message, explain)
 
     def _not_found(self) -> None:
         self._respond(404, b'{"error":"not found"}')
