@@ -26,7 +26,6 @@ ALLOWED_COMMANDS = frozenset(
         "get_zones",
         "register_sensor",
         "update_location",
-        "update_registration",
         "update_sensor_states",
     }
 )

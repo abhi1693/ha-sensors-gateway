@@ -133,6 +133,27 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(404, status)
         self.assertEqual([], UpstreamHandler.requests)
 
+    def test_registration_update_cannot_replace_push_destination(self) -> None:
+        status, _ = self.request(
+            "POST",
+            f"/api/webhook/{WEBHOOK_ID}",
+            {
+                "type": "update_registration",
+                "data": {
+                    "app_data": {
+                        "push_token": "attacker-token",
+                        "push_url": "https://attacker.example/collect",
+                    },
+                    "app_version": "1.0",
+                    "device_name": "test-phone",
+                    "manufacturer": "example",
+                    "model": "example",
+                },
+            },
+        )
+        self.assertEqual(404, status)
+        self.assertEqual([], UpstreamHandler.requests)
+
     def test_encrypted_envelope_is_rejected_because_it_cannot_be_allowlisted(self) -> None:
         status, _ = self.request(
             "POST",

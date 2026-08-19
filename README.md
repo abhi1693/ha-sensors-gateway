@@ -13,8 +13,8 @@
 
 Home Assistant Sensors Gateway is a small, least-privilege reverse gateway for
 the native Home Assistant Companion App webhook protocol. It forwards sensor,
-location, registration, and configuration requests while making control-capable
-commands indistinguishable from a missing endpoint.
+location, and configuration requests while making control-capable or unsafe
+registration commands indistinguishable from a missing endpoint.
 
 It is designed for people who want remote phone telemetry through Cloudflare
 Tunnel, Tailscale Funnel, a conventional reverse proxy, or another HTTPS ingress
@@ -47,13 +47,15 @@ Allowed native commands:
 | `update_sensor_states` | Send every enabled sensor state and its attributes. |
 | `update_location` | Update the mobile device tracker. |
 | `register_sensor` | Register newly enabled Companion App sensors. |
-| `update_registration` | Refresh non-control mobile registration metadata. |
 | `get_config` | Read the mobile integration configuration required by the app. |
 | `get_zones` | Read zones used by mobile location tracking. |
 
 Control commands—including `call_service`, `fire_event`, `render_template`,
 `conversation_process`, `stream_camera`, and `scan_tag`—receive `404` and are
-never forwarded.
+never forwarded. `update_registration` is also rejected because Home Assistant
+allows it to replace the mobile push URL and token, which could redirect future
+notification contents to another endpoint. Perform registration and push-token
+changes through a trusted direct connection to Home Assistant.
 
 Additional controls include:
 

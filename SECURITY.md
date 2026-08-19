@@ -22,3 +22,9 @@ envelopes are rejected because the gateway cannot inspect their command before
 forwarding it. The gateway is not a replacement for Home Assistant
 authentication and must never proxy the Home Assistant REST, WebSocket, login,
 or frontend routes.
+
+The `update_registration` webhook command is intentionally blocked. Home
+Assistant permits that command to replace the device's push URL and token, so
+forwarding it would allow a leaked webhook capability to redirect future
+notification contents. Perform registration changes through a trusted direct
+connection to Home Assistant.
