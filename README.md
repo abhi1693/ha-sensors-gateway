@@ -13,8 +13,8 @@
 
 Home Assistant Sensors Gateway is a small, least-privilege reverse gateway for
 the native Home Assistant Companion App webhook protocol. It forwards sensor,
-location, and configuration requests while making control-capable or unsafe
-registration commands indistinguishable from a missing endpoint.
+location, and selected configuration requests while making direct control or
+unsafe registration commands indistinguishable from a missing endpoint.
 
 It is designed for people who want remote phone telemetry through Cloudflare
 Tunnel, Tailscale Funnel, a conventional reverse proxy, or another HTTPS ingress
@@ -25,13 +25,14 @@ routes, or service calls.
 
 A normal Home Assistant external URL exposes the complete application surface.
 This gateway publishes only one capability-scoped path and understands enough of
-the mobile protocol to reject commands that could operate the home.
+the mobile protocol to reject direct control commands and restrict every device
+to an operator-selected command set.
 
 ```mermaid
 flowchart LR
     phone[Companion App] -->|HTTPS /api/webhook/capability| edge[Your HTTPS ingress]
     edge --> gateway[HA Sensors Gateway]
-    gateway -->|Allowed mobile commands only| ha[Home Assistant]
+    gateway -->|Per-device mobile commands only| ha[Home Assistant]
     gateway -.->|404| blocked[Services, events, templates, cameras, tags]
 ```
 
@@ -40,15 +41,25 @@ VPN, authentication proxy, or general Home Assistant API gateway.
 
 ## Security model
 
-Allowed native commands:
+Globally supported native commands (each capability can be restricted to a
+subset):
 
-| Command | Purpose |
+| Command | Purpose and security consequence |
 | --- | --- |
-| `update_sensor_states` | Send every enabled sensor state and its attributes. |
-| `update_location` | Update the mobile device tracker. |
-| `register_sensor` | Register newly enabled Companion App sensors. |
-| `get_config` | Read the mobile integration configuration required by the app. |
-| `get_zones` | Read zones used by mobile location tracking. |
+| `update_sensor_states` | Updates enabled sensor states and attributes; forged values can trigger automations. |
+| `update_location` | Updates the mobile device tracker; forged locations can trigger presence automations. |
+| `register_sensor` | Creates persistent Home Assistant sensor entities. |
+| `get_config` | Returns installation metadata including latitude, longitude, loaded components, and remote URL. |
+| `get_zones` | Returns the full states and attributes of configured zones. |
+
+> [!WARNING]
+> Blocking direct control commands does not make a webhook capability read-only
+> or unable to affect the physical home. A stolen capability can read every
+> response allowed by its command set and forge sensor or location updates.
+> Automations consuming those updates can unlock doors, open covers, change
+> alarms, or cause other physical effects. Treat mobile webhook input as
+> untrusted, minimize each device's command set, and do not use it as the sole
+> authorization signal for safety-critical automations.
 
 Control commands—including `call_service`, `fire_event`, `render_template`,
 `conversation_process`, `stream_camera`, and `scan_tag`—receive `404` and are
@@ -90,13 +101,37 @@ registration. Add one entry per device:
 ```json
 {
   "64-character-lowercase-hex-webhook-id": {
-    "device": "descriptive-alias"
+    "device": "descriptive-alias",
+    "profile": "ingest-only"
   }
 }
 ```
 
 The alias is used only in logs. It must contain lowercase letters, numbers, or
-dashes and be at most 32 characters.
+dashes and be at most 32 characters. The `ingest-only` profile permits only
+`update_sensor_states` and `update_location`; it blocks configuration and zone
+reads plus persistent sensor registration.
+
+For devices that need additional Companion App behavior, replace `profile` with
+an explicit, non-empty command list:
+
+```json
+{
+  "64-character-lowercase-hex-webhook-id": {
+    "device": "descriptive-alias",
+    "commands": ["update_sensor_states", "update_location", "get_zones"]
+  }
+}
+```
+
+Only commands in the globally supported table are accepted. Unknown or duplicate
+commands, an unknown profile, and a configuration containing both `profile` and
+`commands` fail startup. Omitting both fields retains the legacy behavior of
+granting all five supported commands; this is provided for compatibility and is
+not the recommended configuration. Ingest-only devices cannot refresh Home
+Assistant configuration or zones or register newly enabled sensors through the
+gateway; perform those operations through a trusted direct connection or grant
+only the additional commands required.
 
 ### 2. Run the container
 
@@ -189,6 +224,8 @@ CI tests Python 3.12, 3.13, and 3.14. Tagged releases publish attested
 - Back up no gateway state; the service is stateless.
 - Treat repeated `rejected` events as a reason to review app configuration and
   edge access logs without recording request bodies or full paths.
+- Review every automation triggered by mobile sensor or device-tracker updates;
+  assume a holder of that device's webhook capability can forge those values.
 - Use one replica unless your ingress and rate-limit requirements justify more;
   rate-limit state is intentionally local to each process.
 

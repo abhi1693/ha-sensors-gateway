@@ -17,9 +17,13 @@ from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, urlopen
 
 from ha_sensors_gateway.gateway import (
+    INGEST_ONLY_COMMANDS,
+    SUPPORTED_COMMANDS,
+    Capability,
     Configuration,
     build_upstream_opener,
     create_server,
+    load_capabilities,
     normalize_upstream_url,
 )
 
@@ -321,6 +325,26 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(404, status)
         self.assertEqual([], UpstreamHandler.requests)
 
+    def test_ingest_only_capability_rejects_read_commands(self) -> None:
+        capability = Capability(device="test-phone", commands=INGEST_ONLY_COMMANDS)
+        with patch.object(
+            self.gateway.RequestHandlerClass,
+            "capabilities",
+            {WEBHOOK_ID: capability},
+        ):
+            status, _ = self.request(
+                "POST",
+                f"/api/webhook/{WEBHOOK_ID}",
+                {"type": "get_config"},
+            )
+            self.assertEqual(404, status)
+            self.assertEqual([], UpstreamHandler.requests)
+
+            document = {"type": "update_location", "data": {"latitude": 1, "longitude": 2}}
+            status, _ = self.request("POST", f"/api/webhook/{WEBHOOK_ID}", document)
+            self.assertEqual(200, status)
+            self.assertEqual([(f"/api/webhook/{WEBHOOK_ID}", document)], UpstreamHandler.requests)
+
     def test_registration_update_cannot_replace_push_destination(self) -> None:
         status, _ = self.request(
             "POST",
@@ -493,6 +517,60 @@ class GatewayTest(unittest.TestCase):
 
 
 class ConfigurationTest(unittest.TestCase):
+    def load_capability_document(self, document: dict) -> dict[str, Capability]:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "webhooks.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            return load_capabilities(str(path))
+
+    def test_capabilities_support_legacy_ingest_only_and_explicit_commands(self) -> None:
+        legacy_id = "a" * 64
+        ingest_id = "b" * 64
+        explicit_id = "c" * 64
+        capabilities = self.load_capability_document(
+            {
+                legacy_id: {"device": "legacy-phone"},
+                ingest_id: {"device": "ingest-phone", "profile": "ingest-only"},
+                explicit_id: {
+                    "device": "custom-phone",
+                    "commands": ["update_sensor_states", "get_zones"],
+                },
+            }
+        )
+
+        self.assertEqual(SUPPORTED_COMMANDS, capabilities[legacy_id].commands)
+        self.assertEqual(INGEST_ONLY_COMMANDS, capabilities[ingest_id].commands)
+        self.assertEqual(
+            frozenset({"update_sensor_states", "get_zones"}),
+            capabilities[explicit_id].commands,
+        )
+
+    def test_example_capability_map_uses_ingest_only_profile(self) -> None:
+        example_path = Path(__file__).parents[1] / "examples" / "webhooks.example.json"
+        capabilities = load_capabilities(str(example_path))
+
+        self.assertEqual(1, len(capabilities))
+        self.assertEqual(INGEST_ONLY_COMMANDS, next(iter(capabilities.values())).commands)
+
+    def test_invalid_capability_command_sets_fail_at_startup(self) -> None:
+        invalid_metadata = (
+            {"device": "test-phone", "profile": "standard"},
+            {"device": "test-phone", "commands": []},
+            {"device": "test-phone", "commands": ["call_service"]},
+            {"device": "test-phone", "commands": ["get_config", "get_config"]},
+            {
+                "device": "test-phone",
+                "profile": "ingest-only",
+                "commands": ["update_location"],
+            },
+        )
+        for metadata in invalid_metadata:
+            with (
+                self.subTest(metadata=metadata),
+                self.assertRaisesRegex(ValueError, "mobile webhook"),
+            ):
+                self.load_capability_document({WEBHOOK_ID: metadata})
+
     def test_upstream_opener_does_not_load_environment_proxies(self) -> None:
         with patch("urllib.request.getproxies", side_effect=AssertionError("proxy lookup")):
             opener = build_upstream_opener()

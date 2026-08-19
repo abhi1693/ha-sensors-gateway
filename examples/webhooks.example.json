@@ -1,5 +1,6 @@
 {
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": {
-    "device": "family-phone"
+    "device": "family-phone",
+    "profile": "ingest-only"
   }
 }

@@ -1,4 +1,4 @@
-"""Forward an allowlist of Home Assistant Companion App webhook commands."""
+"""Forward per-capability Home Assistant Companion App webhook commands."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from urllib.request import (
 from ha_sensors_gateway import __version__
 
 WEBHOOK_PATH = re.compile(r"^/api/webhook/([0-9a-f]{64})$")
-ALLOWED_COMMANDS = frozenset(
+SUPPORTED_COMMANDS = frozenset(
     {
         "get_config",
         "get_zones",
@@ -36,6 +36,8 @@ ALLOWED_COMMANDS = frozenset(
         "update_sensor_states",
     }
 )
+INGEST_ONLY_COMMANDS = frozenset({"update_location", "update_sensor_states"})
+COMMAND_PROFILES = {"ingest-only": INGEST_ONLY_COMMANDS}
 
 
 def emit_log(event: str, **fields: object) -> None:
@@ -113,24 +115,53 @@ def build_upstream_opener() -> OpenerDirector:
     return build_opener(ProxyHandler({}), NoRedirectHandler())
 
 
-def load_capabilities(path: str) -> dict[str, str]:
+@dataclass(frozen=True)
+class Capability:
+    device: str
+    commands: frozenset[str]
+
+
+def load_capabilities(path: str) -> dict[str, Capability]:
     with open(path, encoding="utf-8") as config_file:
         document = json.load(config_file, object_pairs_hook=reject_duplicate_keys)
     if not isinstance(document, dict) or not document:
         raise ValueError("at least one mobile webhook must be configured")
 
-    capabilities: ClassVar[dict[str, str]] = {}
+    capabilities: dict[str, Capability] = {}
     for webhook_id, metadata in document.items():
         if not isinstance(webhook_id, str) or not WEBHOOK_PATH.fullmatch(
             f"/api/webhook/{webhook_id}"
         ):
             raise ValueError("invalid mobile webhook identifier")
-        if not isinstance(metadata, dict) or set(metadata) != {"device"}:
+        if not isinstance(metadata, dict) or set(metadata) not in (
+            {"device"},
+            {"device", "commands"},
+            {"device", "profile"},
+        ):
             raise ValueError("invalid mobile webhook metadata")
         device = metadata["device"]
         if not isinstance(device, str) or not re.fullmatch(r"[a-z0-9-]{1,32}", device):
             raise ValueError("invalid device alias")
-        capabilities[webhook_id] = device
+        commands = SUPPORTED_COMMANDS
+        if "profile" in metadata:
+            profile = metadata["profile"]
+            if not isinstance(profile, str) or profile not in COMMAND_PROFILES:
+                raise ValueError("invalid mobile webhook profile")
+            commands = COMMAND_PROFILES[profile]
+        elif "commands" in metadata:
+            configured_commands = metadata["commands"]
+            if (
+                not isinstance(configured_commands, list)
+                or not configured_commands
+                or any(
+                    not isinstance(command, str) or command not in SUPPORTED_COMMANDS
+                    for command in configured_commands
+                )
+                or len(configured_commands) != len(set(configured_commands))
+            ):
+                raise ValueError("invalid mobile webhook commands")
+            commands = frozenset(configured_commands)
+        capabilities[webhook_id] = Capability(device=device, commands=commands)
     return capabilities
 
 
@@ -202,7 +233,7 @@ class RateLimiter:
 class GatewayHandler(BaseHTTPRequestHandler):
     server_version = f"HASensorsGateway/{__version__}"
     sys_version = ""
-    capabilities: ClassVar[dict[str, str]] = {}
+    capabilities: ClassVar[dict[str, Capability]] = {}
     upstream_url = ""
     upstream_opener: ClassVar[OpenerDirector] = build_upstream_opener()
     rate_limiter = RateLimiter(180)
@@ -272,10 +303,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def _not_found(self) -> None:
         self._respond(404, b'{"error":"not found"}')
 
-    def _find_device(self, candidate: str) -> str | None:
-        for webhook_id, device in self.capabilities.items():
+    def _find_capability(self, candidate: str) -> Capability | None:
+        for webhook_id, capability in self.capabilities.items():
             if hmac.compare_digest(candidate, webhook_id):
-                return device
+                return capability
         return None
 
     def _reject(self, device: str, status: int, reason: str) -> None:
@@ -297,10 +328,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._not_found()
             return
 
-        device = self._find_device(match.group(1))
-        if device is None:
+        capability = self._find_capability(match.group(1))
+        if capability is None:
             self._not_found()
             return
+        device = capability.device
         if not self.rate_limiter.allow(match.group(1)):
             self._reject(device, 429, "rate-limit")
             return
@@ -347,7 +379,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._reject(device, 400, "json-shape")
             return
         command = document.get("type")
-        if not isinstance(command, str) or command not in ALLOWED_COMMANDS:
+        if not isinstance(command, str) or command not in capability.commands:
             self._reject(device, 404, "command")
             return
         request = Request(
