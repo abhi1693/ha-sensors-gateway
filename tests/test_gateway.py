@@ -408,7 +408,29 @@ class GatewayTest(unittest.TestCase):
                 urlopen(request)
             statuses.append(context.exception.code)
 
-        self.assertEqual([415, 415, 429], statuses)
+        self.assertEqual([415, 415, 415], statuses)
+        status, _ = self.request(
+            "POST",
+            f"/api/webhook/{WEBHOOK_ID}",
+            {"type": "get_config"},
+        )
+        self.assertEqual(429, status)
+        self.assertEqual([], UpstreamHandler.requests)
+
+    def test_bad_content_type_does_not_reveal_capability_validity(self) -> None:
+        statuses = []
+        for webhook_id in (WEBHOOK_ID, "b" * 64):
+            request = Request(
+                f"{self.base_url}/api/webhook/{webhook_id}",
+                data=b"type=update_location",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as context:
+                urlopen(request)
+            statuses.append(context.exception.code)
+
+        self.assertEqual([415, 415], statuses)
         self.assertEqual([], UpstreamHandler.requests)
 
     def test_duplicate_type_is_rejected(self) -> None:
@@ -439,19 +461,21 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(429, status)
         self.assertEqual(2, len(UpstreamHandler.requests))
 
-    def test_oversized_authenticated_batch_is_rejected(self) -> None:
-        request = (
-            f"POST /api/webhook/{WEBHOOK_ID} HTTP/1.1\r\n"
-            f"Host: 127.0.0.1:{self.gateway.server_port}\r\n"
-            "Content-Type: application/json\r\n"
-            f"Content-Length: {2 * 1024 * 1024 + 1}\r\n"
-            "Connection: close\r\n\r\n"
-        ).encode()
-        with socket.create_connection(("127.0.0.1", self.gateway.server_port)) as client:
-            client.sendall(request)
-            response = client.recv(1024)
+    def test_oversized_batch_does_not_reveal_capability_validity(self) -> None:
+        for webhook_id in (WEBHOOK_ID, "b" * 64):
+            with self.subTest(webhook_id=webhook_id):
+                request = (
+                    f"POST /api/webhook/{webhook_id} HTTP/1.1\r\n"
+                    f"Host: 127.0.0.1:{self.gateway.server_port}\r\n"
+                    "Content-Type: application/json\r\n"
+                    f"Content-Length: {2 * 1024 * 1024 + 1}\r\n"
+                    "Connection: close\r\n\r\n"
+                ).encode()
+                with socket.create_connection(("127.0.0.1", self.gateway.server_port)) as client:
+                    client.sendall(request)
+                    response = client.recv(1024)
 
-        self.assertIn(b" 413 ", response.partition(b"\r\n")[0])
+                self.assertIn(b" 413 ", response.partition(b"\r\n")[0])
         self.assertEqual([], UpstreamHandler.requests)
 
     def test_slow_requests_expire_and_release_bounded_request_slot(self) -> None:

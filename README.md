@@ -73,6 +73,7 @@ Additional controls include:
 - constant-time capability comparison;
 - strict 64-character webhook ID and path validation;
 - JSON-only requests and duplicate-key rejection;
+- capability-independent pre-body validation responses;
 - configurable request/response limits and per-capability rate limiting;
 - a fixed operator-defined upstream with environment proxies disabled and
   redirects rejected;

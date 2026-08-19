@@ -303,6 +303,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def _not_found(self) -> None:
         self._respond(404, b'{"error":"not found"}')
 
+    def _invalid_request(self, status: int) -> None:
+        self._respond(status, b'{"error":"invalid request"}')
+
     def _find_capability(self, candidate: str) -> Capability | None:
         for webhook_id, capability in self.capabilities.items():
             if hmac.compare_digest(candidate, webhook_id):
@@ -314,7 +317,24 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if status == 404:
             self._not_found()
         else:
-            self._respond(status, b'{"error":"invalid request"}')
+            self._invalid_request(status)
+
+    def _validate_post_headers(self) -> tuple[int, tuple[int, str] | None]:
+        if self.headers.get("Transfer-Encoding"):
+            return 0, (400, "transfer-encoding")
+        if self.headers.get_content_type().lower() != "application/json":
+            return 0, (415, "content-type")
+
+        content_lengths = self.headers.get_all("Content-Length", [])
+        if len(content_lengths) != 1:
+            return 0, (400, "content-length")
+        try:
+            content_length = int(content_lengths[0])
+        except ValueError:
+            content_length = -1
+        if content_length < 0 or content_length > self.max_request_bytes:
+            return 0, (413, "request-size")
+        return content_length, None
 
     def do_POST(self) -> None:
         if self._inbound_timed_out.is_set():
@@ -328,31 +348,22 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._not_found()
             return
 
-        capability = self._find_capability(match.group(1))
+        content_length, request_error = self._validate_post_headers()
+        candidate = match.group(1)
+        capability = self._find_capability(candidate)
         if capability is None:
-            self._not_found()
+            if request_error is None:
+                self._not_found()
+            else:
+                self._invalid_request(request_error[0])
             return
         device = capability.device
-        if not self.rate_limiter.allow(match.group(1)):
-            self._reject(device, 429, "rate-limit")
+        if not self.rate_limiter.allow(candidate):
+            status = 429 if request_error is None else request_error[0]
+            self._reject(device, status, "rate-limit")
             return
-        if self.headers.get("Transfer-Encoding"):
-            self._reject(device, 400, "transfer-encoding")
-            return
-        if self.headers.get_content_type().lower() != "application/json":
-            self._reject(device, 415, "content-type")
-            return
-
-        content_lengths = self.headers.get_all("Content-Length", [])
-        if len(content_lengths) != 1:
-            self._reject(device, 400, "content-length")
-            return
-        try:
-            content_length = int(content_lengths[0])
-        except ValueError:
-            content_length = -1
-        if content_length < 0 or content_length > self.max_request_bytes:
-            self._reject(device, 413, "request-size")
+        if request_error is not None:
+            self._reject(device, *request_error)
             return
 
         try:
