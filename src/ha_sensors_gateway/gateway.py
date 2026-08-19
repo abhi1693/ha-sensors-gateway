@@ -397,7 +397,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
         try:
             document = json.loads(body, object_pairs_hook=reject_duplicate_keys)
-        except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        except (RecursionError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
             self._reject(device, 400, "json")
             return
         if not isinstance(document, dict):

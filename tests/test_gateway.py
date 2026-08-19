@@ -659,6 +659,24 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual([400, 400, 404], statuses)
         self.assertEqual([], UpstreamHandler.requests)
 
+    def test_excessively_nested_json_is_rejected(self) -> None:
+        body = b"[" * 10_000 + b"]" * 10_000
+        request = Request(
+            f"{self.base_url}/api/webhook/{WEBHOOK_ID}",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request)
+        with context.exception:
+            self.assertEqual(400, context.exception.code)
+            self.assertEqual(
+                {"error": "invalid request"},
+                json.loads(context.exception.read()),
+            )
+        self.assertEqual([], UpstreamHandler.requests)
+
     def test_rate_limit_is_per_capability(self) -> None:
         for _ in range(2):
             status, _ = self.request(
