@@ -143,9 +143,12 @@ gateway appends no device ID itself—the Companion App constructs its native
 | `RATE_LIMIT_PER_MINUTE` | `180` | Maximum accepted requests per webhook capability. |
 | `MAX_REQUEST_BYTES` | `2097152` | Maximum complete sensor batch size; upper bound is 16 MiB. |
 | `MAX_RESPONSE_BYTES` | `1048576` | Maximum Home Assistant response size; upper bound is 16 MiB. |
-| `TIMEOUT_SECONDS` | `15` | Request-body and upstream timeout; upper bound is 120 seconds. |
+| `MAX_CONCURRENT_REQUESTS` | `64` | Maximum active client connections; upper bound is 1024. |
+| `TIMEOUT_SECONDS` | `15` | Absolute request header/body deadline and upstream socket timeout; upper bound is 120 seconds. |
 
-The process fails closed at startup when configuration is missing or invalid.
+Connections above `MAX_CONCURRENT_REQUESTS` are closed without being assigned a
+worker. The process fails closed at startup when configuration is missing or
+invalid.
 
 ## Reverse-proxy requirements
 
@@ -153,6 +156,8 @@ The process fails closed at startup when configuration is missing or invalid.
 - Preserve the exact request path and body.
 - Permit `POST` to `/api/webhook/<id>`.
 - Set a request-body limit at least as large as `MAX_REQUEST_BYTES`.
+- Enforce edge connection limits and an absolute header/body deadline no longer
+  than the gateway's `TIMEOUT_SECONDS`.
 - Do not log full webhook paths at the proxy or tunnel layer.
 - Restrict the gateway's network egress to Home Assistant and DNS where your
   platform supports network policy.

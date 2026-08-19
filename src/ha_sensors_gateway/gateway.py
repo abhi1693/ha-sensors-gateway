@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import re
+import socket
 import threading
 import time
 from collections import defaultdict, deque
@@ -99,6 +100,7 @@ class Configuration:
     rate_limit_per_minute: int
     max_request_bytes: int
     max_response_bytes: int
+    max_concurrent_requests: int
     timeout_seconds: int
 
     @classmethod
@@ -118,6 +120,9 @@ class Configuration:
             ),
             max_response_bytes=read_positive_integer(
                 "MAX_RESPONSE_BYTES", 1024 * 1024, maximum=16 * 1024 * 1024
+            ),
+            max_concurrent_requests=read_positive_integer(
+                "MAX_CONCURRENT_REQUESTS", 64, maximum=1024
             ),
             timeout_seconds=read_positive_integer("TIMEOUT_SECONDS", 15, maximum=120),
         )
@@ -155,23 +160,64 @@ class GatewayHandler(BaseHTTPRequestHandler):
     max_response_bytes = 1024 * 1024
     timeout_seconds = 15
 
+    def setup(self) -> None:
+        self.request.settimeout(self.timeout_seconds)
+        super().setup()
+        # Socket timeouts reset after successful reads; this timer bounds the
+        # complete header-and-body phase even when a client sends a slow trickle.
+        self._inbound_deadline_lock = threading.Lock()
+        self._inbound_deadline_active = True
+        self._inbound_timed_out = threading.Event()
+        self._inbound_deadline_timer = threading.Timer(
+            self.timeout_seconds,
+            self._expire_inbound_request,
+        )
+        self._inbound_deadline_timer.daemon = True
+        self._inbound_deadline_timer.start()
+
+    def finish(self) -> None:
+        self._complete_inbound_request()
+        super().finish()
+
+    def _complete_inbound_request(self) -> bool:
+        with self._inbound_deadline_lock:
+            self._inbound_deadline_active = False
+        self._inbound_deadline_timer.cancel()
+        # Do not release the request slot while a canceled deadline thread is
+        # still alive; this keeps total worker and timer threads strictly bounded.
+        if self._inbound_deadline_timer is not threading.current_thread():
+            self._inbound_deadline_timer.join()
+        return not self._inbound_timed_out.is_set()
+
+    def _expire_inbound_request(self) -> None:
+        with self._inbound_deadline_lock:
+            if not self._inbound_deadline_active:
+                return
+            self._inbound_deadline_active = False
+            self._inbound_timed_out.set()
+        self.close_connection = True
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            return
+
     def _respond(
         self,
         status: int,
         body: bytes = b"",
         content_type: str = "application/json",
     ) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        if self.command != "HEAD" and body:
-            try:
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            if self.command != "HEAD" and body:
                 self.wfile.write(body)
-            except BrokenPipeError:
-                return
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _not_found(self) -> None:
         self._respond(404, b'{"error":"not found"}')
@@ -190,6 +236,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._respond(status, b'{"error":"invalid request"}')
 
     def do_POST(self) -> None:
+        if self._inbound_timed_out.is_set():
+            return
         parsed_path = urlsplit(self.path)
         if parsed_path.query or parsed_path.fragment:
             self._not_found()
@@ -202,6 +250,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         device = self._find_device(match.group(1))
         if device is None:
             self._not_found()
+            return
+        if not self.rate_limiter.allow(match.group(1)):
+            self._reject(device, 429, "rate-limit")
             return
         if self.headers.get("Transfer-Encoding"):
             self._reject(device, 400, "transfer-encoding")
@@ -222,14 +273,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._reject(device, 413, "request-size")
             return
 
-        self.connection.settimeout(self.timeout_seconds)
         try:
             body = self.rfile.read(content_length)
         except TimeoutError:
             self._reject(device, 408, "request-timeout")
             return
         if len(body) != content_length:
+            if self._inbound_timed_out.is_set():
+                emit_log("rejected", device=device, reason="request-timeout", status=408)
+                return
             self._reject(device, 400, "incomplete-body")
+            return
+        if not self._complete_inbound_request():
+            emit_log("rejected", device=device, reason="request-timeout", status=408)
             return
 
         try:
@@ -244,10 +300,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if not isinstance(command, str) or command not in ALLOWED_COMMANDS:
             self._reject(device, 404, "command")
             return
-        if not self.rate_limiter.allow(match.group(1)):
-            self._reject(device, 429, "rate-limit")
-            return
-
         request = Request(
             f"{self.upstream_url}{parsed_path.path}",
             data=body,
@@ -292,6 +344,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self._respond(status, response_body, content_type)
 
     def do_GET(self) -> None:
+        if not self._complete_inbound_request():
+            return
         if urlsplit(self.path).path == "/healthz" and not urlsplit(self.path).query:
             self._respond(200, b'{"status":"ok"}')
             return
@@ -301,6 +355,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_PUT(self) -> None:
+        if not self._complete_inbound_request():
+            return
         self._not_found()
 
     do_PATCH = do_PUT
@@ -315,6 +371,56 @@ class GatewayServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        request_handler: type[BaseHTTPRequestHandler],
+        max_concurrent_requests: int,
+    ) -> None:
+        self.max_concurrent_requests = max_concurrent_requests
+        self._request_slots = threading.BoundedSemaphore(max_concurrent_requests)
+        self._request_count_lock = threading.Lock()
+        self._active_requests = 0
+        super().__init__(server_address, request_handler)
+
+    @property
+    def active_requests(self) -> int:
+        with self._request_count_lock:
+            return self._active_requests
+
+    def process_request(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
+    ) -> None:
+        # Acquire before ThreadingMixIn creates a worker so excess connections
+        # cannot allocate additional request or deadline threads.
+        if not self._request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        with self._request_count_lock:
+            self._active_requests += 1
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._release_request_slot()
+            raise
+
+    def process_request_thread(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
+    ) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._release_request_slot()
+
+    def _release_request_slot(self) -> None:
+        with self._request_count_lock:
+            self._active_requests -= 1
+        self._request_slots.release()
+
 
 def create_server(
     address: tuple[str, int],
@@ -324,6 +430,7 @@ def create_server(
     *,
     max_request_bytes: int = 2 * 1024 * 1024,
     max_response_bytes: int = 1024 * 1024,
+    max_concurrent_requests: int = 64,
     timeout_seconds: int = 15,
 ) -> GatewayServer:
     capabilities = load_capabilities(config_path)
@@ -339,7 +446,7 @@ def create_server(
             "timeout_seconds": timeout_seconds,
         },
     )
-    return GatewayServer(address, handler)
+    return GatewayServer(address, handler, max_concurrent_requests)
 
 
 def main() -> None:
@@ -351,11 +458,13 @@ def main() -> None:
         configuration.rate_limit_per_minute,
         max_request_bytes=configuration.max_request_bytes,
         max_response_bytes=configuration.max_response_bytes,
+        max_concurrent_requests=configuration.max_concurrent_requests,
         timeout_seconds=configuration.timeout_seconds,
     )
     emit_log(
         "started",
         devices=len(server.RequestHandlerClass.capabilities),
+        max_concurrent_requests=configuration.max_concurrent_requests,
         port=configuration.port,
         version=__version__,
     )

@@ -7,6 +7,7 @@ import os
 import socket
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -47,6 +48,7 @@ class GatewayTest(unittest.TestCase):
             json.dumps({WEBHOOK_ID: {"device": "test-phone"}}),
             encoding="utf-8",
         )
+        cls.config_path = str(config_path)
 
         cls.upstream = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
         cls.upstream_thread = threading.Thread(
@@ -58,7 +60,7 @@ class GatewayTest(unittest.TestCase):
 
         cls.gateway = create_server(
             ("127.0.0.1", 0),
-            str(config_path),
+            cls.config_path,
             upstream_url,
             rate_limit=2,
             max_request_bytes=2 * 1024 * 1024,
@@ -181,16 +183,20 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(404, status)
         self.assertEqual([], UpstreamHandler.requests)
 
-    def test_non_json_request_is_rejected(self) -> None:
-        request = Request(
-            f"{self.base_url}/api/webhook/{WEBHOOK_ID}",
-            data=b"type=update_location",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            method="POST",
-        )
-        with self.assertRaises(HTTPError) as context:
-            urlopen(request)
-        self.assertEqual(415, context.exception.code)
+    def test_authenticated_malformed_requests_are_rate_limited_before_body(self) -> None:
+        statuses = []
+        for _ in range(3):
+            request = Request(
+                f"{self.base_url}/api/webhook/{WEBHOOK_ID}",
+                data=b"type=update_location",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as context:
+                urlopen(request)
+            statuses.append(context.exception.code)
+
+        self.assertEqual([415, 415, 429], statuses)
         self.assertEqual([], UpstreamHandler.requests)
 
     def test_duplicate_type_is_rejected(self) -> None:
@@ -236,6 +242,69 @@ class GatewayTest(unittest.TestCase):
         self.assertIn(b" 413 ", response.partition(b"\r\n")[0])
         self.assertEqual([], UpstreamHandler.requests)
 
+    def test_slow_requests_expire_and_release_bounded_request_slot(self) -> None:
+        gateway = create_server(
+            ("127.0.0.1", 0),
+            self.config_path,
+            f"http://127.0.0.1:{self.upstream.server_port}",
+            rate_limit=2,
+            max_concurrent_requests=1,
+            timeout_seconds=1,
+        )
+        gateway_thread = threading.Thread(target=gateway.serve_forever, daemon=True)
+        gateway_thread.start()
+        address = ("127.0.0.1", gateway.server_port)
+        slow_client = socket.create_connection(address, timeout=2)
+        try:
+            slow_client.sendall(b"GET /healthz HTTP/1.1\r\nHost: localhost")
+            deadline = time.monotonic() + 1
+            while gateway.active_requests != 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(1, gateway.active_requests)
+
+            with socket.create_connection(address, timeout=2) as excess_client:
+                excess_client.sendall(
+                    b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                )
+                self.assertEqual(b"", excess_client.recv(1024))
+
+            slow_client.settimeout(2)
+            self.assertEqual(b"", slow_client.recv(1024))
+            deadline = time.monotonic() + 1
+            while gateway.active_requests and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(0, gateway.active_requests)
+
+            with socket.create_connection(address, timeout=2) as slow_body_client:
+                slow_body_client.sendall(
+                    (
+                        f"POST /api/webhook/{WEBHOOK_ID} HTTP/1.1\r\n"
+                        "Host: localhost\r\n"
+                        "Content-Type: application/json\r\n"
+                        "Content-Length: 100\r\n"
+                        "Connection: close\r\n\r\n"
+                        "{"
+                    ).encode()
+                )
+                deadline = time.monotonic() + 1
+                while gateway.active_requests != 1 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(1, gateway.active_requests)
+                slow_body_client.settimeout(2)
+                self.assertEqual(b"", slow_body_client.recv(1024))
+
+            deadline = time.monotonic() + 1
+            while gateway.active_requests and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(0, gateway.active_requests)
+
+            with urlopen(f"http://127.0.0.1:{gateway.server_port}/healthz") as response:
+                self.assertEqual(200, response.status)
+        finally:
+            slow_client.close()
+            gateway.shutdown()
+            gateway.server_close()
+
 
 class ConfigurationTest(unittest.TestCase):
     def test_upstream_url_is_required(self) -> None:
@@ -251,6 +320,7 @@ class ConfigurationTest(unittest.TestCase):
             {
                 "UPSTREAM_URL": "http://home-assistant:8123/",
                 "PORT": "9090",
+                "MAX_CONCURRENT_REQUESTS": "12",
                 "MAX_REQUEST_BYTES": "4096",
             },
             clear=True,
@@ -258,6 +328,7 @@ class ConfigurationTest(unittest.TestCase):
             configuration = Configuration.from_environment()
         self.assertEqual("http://home-assistant:8123", configuration.upstream_url)
         self.assertEqual(9090, configuration.port)
+        self.assertEqual(12, configuration.max_concurrent_requests)
         self.assertEqual(4096, configuration.max_request_bytes)
 
     def test_upstream_credentials_are_rejected(self) -> None:
