@@ -26,6 +26,7 @@ from ha_sensors_gateway.gateway import (
     load_capabilities,
     normalize_upstream_url,
 )
+from ha_sensors_gateway.healthcheck import probe_health
 
 WEBHOOK_ID = "a" * 64
 
@@ -176,6 +177,7 @@ class GatewayTest(unittest.TestCase):
         status, body = self.request("GET", "/healthz")
         self.assertEqual(200, status)
         self.assertEqual({"status": "ok"}, json.loads(body))
+        self.assertTrue(probe_health(self.gateway.server_port))
 
     def test_health_endpoint_rejects_non_get_methods(self) -> None:
         status, _ = self.request("PUT", "/healthz")
@@ -472,11 +474,7 @@ class GatewayTest(unittest.TestCase):
                 time.sleep(0.01)
             self.assertEqual(1, gateway.active_requests)
 
-            with socket.create_connection(address, timeout=2) as excess_client:
-                excess_client.sendall(
-                    b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-                )
-                self.assertEqual(b"", excess_client.recv(1024))
+            self.assertFalse(probe_health(gateway.server_port))
 
             slow_client.settimeout(2)
             self.assertEqual(b"", slow_client.recv(1024))
@@ -508,8 +506,7 @@ class GatewayTest(unittest.TestCase):
                 time.sleep(0.01)
             self.assertEqual(0, gateway.active_requests)
 
-            with urlopen(f"http://127.0.0.1:{gateway.server_port}/healthz") as response:
-                self.assertEqual(200, response.status)
+            self.assertTrue(probe_health(gateway.server_port))
         finally:
             slow_client.close()
             gateway.shutdown()

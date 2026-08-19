@@ -9,20 +9,11 @@ services:
       - no-new-privileges:true
     environment:
       UPSTREAM_URL: http://home-assistant:8123
+      PORT: ${PORT:-8080}
     volumes:
       - ./webhooks.json:/run/secrets/webhooks.json:ro
     ports:
-      - 127.0.0.1:8080:8080
-    healthcheck:
-      test:
-        - CMD
-        - python3
-        - -c
-        - import socket; socket.create_connection(('127.0.0.1', 8080), 3).close()
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
+      - 127.0.0.1:${PORT:-8080}:${PORT:-8080}
     networks:
       - home-assistant
 

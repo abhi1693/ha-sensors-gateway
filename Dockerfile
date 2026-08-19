@@ -27,6 +27,6 @@ USER 65532:65532
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD ["python3", "-c", "import os,socket; socket.create_connection(('127.0.0.1', int(os.getenv('PORT', '8080'))), 3).close()"]
+  CMD ["python3", "-m", "ha_sensors_gateway.healthcheck"]
 
 ENTRYPOINT ["python3", "-m", "ha_sensors_gateway"]
