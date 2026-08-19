@@ -69,12 +69,28 @@ def read_positive_integer(
 
 
 def normalize_upstream_url(value: str) -> str:
-    parsed = urlsplit(value)
+    if any(
+        character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value
+    ):
+        raise ValueError("UPSTREAM_URL must be an absolute HTTP(S) origin")
+    if "?" in value or "#" in value:
+        raise ValueError("UPSTREAM_URL must not contain a query or fragment")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("UPSTREAM_URL must be an absolute HTTP(S) origin") from error
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("UPSTREAM_URL must be an absolute HTTP(S) URL")
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError("UPSTREAM_URL must not contain credentials, a query, or a fragment")
-    return value.rstrip("/")
+        raise ValueError("UPSTREAM_URL must be an absolute HTTP(S) origin")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("UPSTREAM_URL must not contain credentials")
+    if "\\" in parsed.netloc:
+        raise ValueError("UPSTREAM_URL must be an absolute HTTP(S) origin")
+    if parsed.path not in {"", "/"}:
+        raise ValueError("UPSTREAM_URL must not contain a path")
+    if port == 0 or (port is None and parsed.netloc.endswith(":")):
+        raise ValueError("UPSTREAM_URL must contain a valid port")
+    return value[:-1] if parsed.path == "/" else value
 
 
 class NoRedirectHandler(HTTPRedirectHandler):

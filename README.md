@@ -138,7 +138,7 @@ gateway appends no device ID itself—the Companion App constructs its native
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `UPSTREAM_URL` | Required | Internal Home Assistant origin, such as `http://home-assistant:8123`. |
+| `UPSTREAM_URL` | Required | Internal Home Assistant HTTP(S) origin only, with no credentials, path, query, or fragment, such as `http://home-assistant:8123`. |
 | `PORT` | `8080` | Gateway listen port. |
 | `WEBHOOK_CONFIG` | `/run/secrets/webhooks.json` | Mounted capability map. |
 | `RATE_LIMIT_PER_MINUTE` | `180` | Maximum accepted requests per webhook capability. |

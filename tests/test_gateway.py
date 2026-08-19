@@ -16,7 +16,12 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, urlopen
 
-from ha_sensors_gateway.gateway import Configuration, build_upstream_opener, create_server
+from ha_sensors_gateway.gateway import (
+    Configuration,
+    build_upstream_opener,
+    create_server,
+    normalize_upstream_url,
+)
 
 WEBHOOK_ID = "a" * 64
 
@@ -519,6 +524,45 @@ class ConfigurationTest(unittest.TestCase):
         self.assertEqual(9090, configuration.port)
         self.assertEqual(12, configuration.max_concurrent_requests)
         self.assertEqual(4096, configuration.max_request_bytes)
+
+    def test_valid_upstream_origins_are_normalized(self) -> None:
+        origins = {
+            "http://home-assistant:8123/": "http://home-assistant:8123",
+            "https://home-assistant": "https://home-assistant",
+            "http://127.0.0.1:8123/": "http://127.0.0.1:8123",
+            "https://[2001:db8::1]:8123/": "https://[2001:db8::1]:8123",
+        }
+        for value, expected in origins.items():
+            with self.subTest(value=value):
+                self.assertEqual(expected, normalize_upstream_url(value))
+
+    def test_invalid_upstream_origins_are_rejected_at_startup(self) -> None:
+        invalid_origins = (
+            "http://home-assistant:bad",
+            "http://home-assistant:70000",
+            "http://home-assistant:0",
+            "http://home-assistant:",
+            "http://home-assistant/base",
+            "http://home-assistant/?",
+            "http://home-assistant/#",
+            "http://home-assistant?",
+            "http://home-assistant#",
+            "http://home assistant:8123",
+            "http://home-assistant:8123\n",
+            "http://home-assistant:8123\\suffix",
+            "http://[::1",
+            "ftp://home-assistant",
+        )
+        for value in invalid_origins:
+            with (
+                self.subTest(value=value),
+                patch.dict(os.environ, {"UPSTREAM_URL": value}, clear=True),
+                self.assertRaisesRegex(ValueError, "UPSTREAM_URL"),
+            ):
+                Configuration.from_environment()
+
+        with self.assertRaisesRegex(ValueError, "UPSTREAM_URL"):
+            normalize_upstream_url("http://home-assistant:8123\x00")
 
     def test_upstream_credentials_are_rejected(self) -> None:
         with (
