@@ -12,6 +12,17 @@ reports as soon as practical and coordinate disclosure after a fix is available.
 
 ## Security boundary
 
+If a VPN meets the deployment's functional requirements, it is the preferred
+boundary: Home Assistant and its webhook routes remain on the private network.
+The gateway is intended only for deployments where the native Companion App
+webhook must remain reachable over public HTTPS without an active VPN.
+
+Deploying the gateway means trusting its HTTP parsing, capability lookup, command
+filtering, and configuration in addition to the public HTTPS ingress. The project
+uses tests, resource bounds, pinned artifacts, and a deliberately small
+implementation to reduce this risk, but none of those measures prove the absence
+of filtering defects. A defect could broaden the intended public surface.
+
 The gateway treats each Home Assistant mobile-app webhook ID as a bearer
 capability. Protect the capability map like a password, mount it read-only, and
 terminate public traffic with HTTPS. A reverse proxy or tunnel provider that

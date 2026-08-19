@@ -21,6 +21,13 @@ Tunnel, Tailscale Funnel, a conventional reverse proxy, or another HTTPS ingress
 without exposing the Home Assistant frontend, REST API, WebSocket API, login
 routes, or service calls.
 
+> [!IMPORTANT]
+> If a VPN works for your devices and usage, prefer the VPN. It avoids routing a
+> Home Assistant webhook through the public Internet. This gateway is for cases
+> that require the native Companion App webhook to remain reachable over public
+> HTTPS; it reduces that exposed surface, but does not eliminate public exposure
+> or the need to trust the gateway's filtering implementation.
+
 ## Why this exists
 
 A normal Home Assistant external URL exposes the complete application surface.
@@ -38,6 +45,25 @@ flowchart LR
 
 The gateway is intentionally **not** a remote dashboard, notification relay,
 VPN, authentication proxy, or general Home Assistant API gateway.
+
+## VPN or gateway?
+
+These are different security models, not interchangeable ways to achieve the
+same boundary:
+
+| | VPN | Sensors gateway |
+| --- | --- | --- |
+| Home Assistant exposure | Home Assistant remains reachable only through the private network. | One capability-bearing webhook path is reachable through public HTTPS. |
+| Public service | The VPN listener is public; Home Assistant routes are not. | The HTTPS ingress and gateway webhook endpoint are public. |
+| Required trust | VPN implementation and configuration, client credentials, and authorized devices. | HTTPS ingress, secrecy of webhook IDs, and correct gateway parsing, filtering, and command policy. |
+| Best fit | Devices can maintain or establish the VPN whenever telemetry is sent. | The native Companion App must send telemetry without an active VPN connection. |
+
+The gateway cannot offer the same boundary as keeping the webhook off the public
+Internet. A filtering defect could expose behavior the policy intended to block.
+Tests, a small auditable implementation, pinned artifacts, and layered network
+controls reduce that risk; they do not prove that filtering mistakes are
+impossible. Do not deploy the gateway merely to replace a VPN that already meets
+your requirements.
 
 ## Security model
 
