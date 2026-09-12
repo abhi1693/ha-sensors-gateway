@@ -17,7 +17,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN python3 -m pip uninstall --yes pip \
+RUN apk upgrade --no-cache \
+    && python3 -m pip uninstall --yes pip \
     && addgroup -g 65532 -S gateway \
     && adduser -S -D -H -u 65532 -G gateway gateway
 
