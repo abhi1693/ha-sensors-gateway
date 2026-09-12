@@ -1,0 +1,18 @@
+{
+  "schema-version": 1,
+  "images": [
+    {
+      "id": "gateway",
+      "image": "ghcr.io/abhi1693/ha-sensors-gateway",
+      "file": "Dockerfile",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "build-args": {
+        "VERSION": "v{version}",
+        "REVISION": "{revision}"
+      }
+    }
+  ]
+}
