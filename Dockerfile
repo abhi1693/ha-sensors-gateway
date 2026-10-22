@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.20
-FROM python:3.14.7-alpine3.23@sha256:6b8f06d04d5305c1d1288435388df9165ab41e681fae6439d6349d8053cc3f83
+FROM python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
 
 ARG VERSION=dev
 ARG REVISION=unknown

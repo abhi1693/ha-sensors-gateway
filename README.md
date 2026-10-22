@@ -172,7 +172,7 @@ docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -e UPSTREAM_URL=http://home-assistant:8123 \
   -v "$PWD/webhooks.json:/run/secrets/webhooks.json:ro" \
-  ghcr.io/abhi1693/ha-sensors-gateway:0.2.0
+  ghcr.io/abhi1693/ha-sensors-gateway:0.2.1
 ```
 
 Alternatively, copy `examples/compose.yaml` and start it with `docker compose
@@ -264,3 +264,8 @@ a fresh runtime-image vulnerability database. Tagged releases publish attested
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Next patch release
+
+Version 0.2.1 refreshes the runtime and development dependencies. See
+[CHANGELOG.md](CHANGELOG.md) for the dependency versions.
