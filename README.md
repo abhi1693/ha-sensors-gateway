@@ -240,13 +240,25 @@ ruff format --check .
 mypy --strict src
 PYTHONPATH=src coverage run -m unittest discover -s tests -v
 coverage report
-docker build -t ha-sensors-gateway:test .
+docker build --build-arg VERSION=v0.2.1 -t ha-sensors-gateway:test .
+bash scripts/smoke-runtime.sh ha-sensors-gateway:test "$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}')"
 ```
 
-CI tests Python 3.12, 3.13, and 3.14, enforces at least 90% branch coverage
-across the application package, and rejects fixed high or critical findings from
-a fresh runtime-image vulnerability database. Tagged releases publish attested
-`linux/amd64` and `linux/arm64` images to GHCR.
+CI tests Python 3.12, 3.13, and 3.14 and enforces at least 90% branch coverage
+across the application package. Every pull request builds `linux/amd64` and
+`linux/arm64` images on matching native runners, generates an SBOM, and rejects
+all high or critical findings, including findings without a published fix, using
+a fresh vulnerability database. Pull-request image checks do not publish images.
+
+The same manifest runs a smoke test on each architecture before release-image
+promotion. It checks the source, OCI label, and runtime application versions,
+the pinned Python version, UID/GID 65532, and pip absence, then starts the actual
+gateway entrypoint and its health probe. A loopback-only fixture accepts one
+`get_zones` read; control commands, ungranted reads, unknown capabilities, and
+unrelated API paths must remain blocked. The smoke container has no external
+network, uses a read-only root filesystem, and never contacts Home Assistant.
+Tagged releases publish attested dual-architecture images only after these
+image gates pass.
 
 ## Operational guidance
 
@@ -267,5 +279,8 @@ MIT. See [LICENSE](LICENSE).
 
 ## Next patch release
 
-Version 0.2.1 refreshes the runtime and development dependencies. See
+Version 0.2.1 refreshes the runtime and development dependencies and adds the
+native image checks above. Source preparation is complete when the Python and
+workflow checks pass; release readiness additionally requires both native image
+scan, SBOM, and smoke jobs to pass for the exact candidate commit. See
 [CHANGELOG.md](CHANGELOG.md) for the dependency versions.

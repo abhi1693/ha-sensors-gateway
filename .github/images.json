@@ -5,6 +5,7 @@
       "id": "gateway",
       "image": "ghcr.io/abhi1693/ha-sensors-gateway",
       "file": "Dockerfile",
+      "smoke-script": "scripts/smoke-runtime.sh",
       "platforms": [
         "linux/amd64",
         "linux/arm64"

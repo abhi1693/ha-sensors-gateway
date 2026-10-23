@@ -23,6 +23,7 @@ RUN apk upgrade --no-cache \
     && adduser -S -D -H -u 65532 -G gateway gateway
 
 COPY --chown=65532:65532 src/ /app/src/
+COPY --chown=65532:65532 pyproject.toml /app/pyproject.toml
 
 USER 65532:65532
 
