@@ -15,6 +15,11 @@ jobs:
   ci:
     name: Required CI
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
   images:
     uses: abhi1693/actions/.github/workflows/container-images.yml@v1
     with:

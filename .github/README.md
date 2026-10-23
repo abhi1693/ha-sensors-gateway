@@ -6,3 +6,11 @@ See the [shared release history](https://github.com/abhi1693/actions/releases) f
 Repository-owned scripts, triggers, scanner exceptions and application smoke checks
 remain alongside the application. Image manifests declare components rather than
 copying workflow steps.
+
+`ci.yml` calls the shared image manifest with publication disabled on pull
+requests and requires both native AMD64 and ARM64 builds. Shared SBOM and scan
+defaults include unfixed high and critical vulnerabilities. The manifest's
+runtime smoke verifies source/runtime version parity, Python, non-root execution,
+and pip absence, then checks the real HTTP process against an isolated local
+read fixture. The release workflow uses the same manifest and smoke gate before
+promoting candidate images.

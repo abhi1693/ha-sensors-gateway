@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.20
-FROM python:3.14.7-alpine3.23@sha256:6b8f06d04d5305c1d1288435388df9165ab41e681fae6439d6349d8053cc3f83
+FROM python:3.14.9-alpine3.24@sha256:dbeb11d16bb95c3a7e3c25c842cb9f20cbc8c18f8be0461a4a0dcc861ad386a0
 
 ARG VERSION=dev
 ARG REVISION=unknown
@@ -23,6 +23,7 @@ RUN apk upgrade --no-cache \
     && adduser -S -D -H -u 65532 -G gateway gateway
 
 COPY --chown=65532:65532 src/ /app/src/
+COPY --chown=65532:65532 pyproject.toml /app/pyproject.toml
 
 USER 65532:65532
 

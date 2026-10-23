@@ -74,39 +74,17 @@ jobs:
         run: mypy --strict src
 
   container:
-    name: Container
+    name: Native runtime images
     needs: [test, typecheck]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
-      - name: Build test image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          load: true
-          push: false
-          tags: ha-sensors-gateway:test
-
-      - name: Verify non-root runtime and import
-        run: |
-          test "$(docker image inspect ha-sensors-gateway:test --format '{{.Config.User}}')" = "65532:65532"
-          docker run --rm --entrypoint python3 ha-sensors-gateway:test \
-            -c "import importlib.util; from ha_sensors_gateway.gateway import SUPPORTED_COMMANDS; assert 'call_service' not in SUPPORTED_COMMANDS; assert importlib.util.find_spec('pip') is None"
-
-      - name: Scan runtime image with a fresh vulnerability database
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ha-sensors-gateway:test
-          cache: "false"
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
+    uses: abhi1693/actions/.github/workflows/container-images.yml@v1
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    with:
+      manifest: .github/images.json
+      publish: false
+      version-file: pyproject.toml
+      changed-only: false
+      artifact-scope: ci-images

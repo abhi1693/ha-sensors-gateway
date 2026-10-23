@@ -6,6 +6,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from ha_sensors_gateway import __version__
 from ha_sensors_gateway.gateway import SUPPORTED_COMMANDS
 from ha_sensors_gateway.settings import (
     DEFAULT_WEBHOOK_CONFIG,
@@ -71,6 +72,8 @@ class MetadataConsistencyTest(unittest.TestCase):
         with (ROOT / "pyproject.toml").open("rb") as project_file:
             project_version = tomllib.load(project_file)["project"]["version"]
         image = f"ghcr.io/abhi1693/ha-sensors-gateway:{project_version}"
+
+        self.assertEqual(project_version, __version__)
 
         self.assertIn(image, (ROOT / "README.md").read_text(encoding="utf-8"))
         self.assertIn(

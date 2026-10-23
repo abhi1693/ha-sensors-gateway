@@ -15,8 +15,15 @@ ruff format --check .
 mypy --strict src
 PYTHONPATH=src coverage run -m unittest discover -s tests -v
 coverage report
-docker build -t ha-sensors-gateway:test .
+docker build --build-arg VERSION=v0.2.1 -t ha-sensors-gateway:test .
+bash scripts/smoke-runtime.sh ha-sensors-gateway:test "$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}')"
 ```
 
 Changes that broaden the command allowlist require tests proving why they cannot
 control Home Assistant or disclose unrelated data.
+
+The runtime smoke starts the real gateway against a local, read-only fixture
+inside a container with external networking disabled. Never replace that fixture
+with a real Home Assistant origin or capability. CI runs it independently on
+native AMD64 and ARM64 after the shared SBOM and strict vulnerability scan;
+unfixed high and critical findings block image promotion too.
